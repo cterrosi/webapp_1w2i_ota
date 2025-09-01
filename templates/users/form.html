@@ -1,0 +1,31 @@
+﻿{% extends "base.html" %}
+{% block title %}{{ 'Nuovo utente' if mode=='create' else 'Modifica utente' }}{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h3 class="mb-0">{{ 'Nuovo utente' if mode=='create' else 'Modifica utente' }}</h3>
+    <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('users.list') }}" data-spinner="Back to users...">← Torna alla lista</a>
+</div>
+
+<form method="post" autocomplete="off" data-spinner="Saving user...">
+    <div class="mb-3">
+        <label class="form-label">Username</label>
+        <input name="username" class="form-control" required
+               value="{{ user.username if user else '' }}" maxlength="80">
+    </div>
+
+    <div class="mb-3">
+        <label class="form-label">Password {{ '(lascia vuoto per non cambiare)' if mode=='edit' else '' }}</label>
+        <input name="password" type="password" class="form-control" {{ 'required' if mode=='create' }}>
+    </div>
+
+    <div class="mb-3">
+        <label class="form-label">Conferma Password {{ '(lascia vuoto per non cambiare)' if mode=='edit' else '' }}</label>
+        <input name="confirm" type="password" class="form-control" {{ 'required' if mode=='create' }}>
+    </div>
+
+    <div class="d-flex gap-2">
+        <button class="btn btn-primary" type="submit">Salva</button>
+        <a class="btn btn-outline-secondary" href="{{ url_for('users.list') }}" data-spinner="Back to users...">Annulla</a>
+    </div>
+</form>
+{% endblock %}

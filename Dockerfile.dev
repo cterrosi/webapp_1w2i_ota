@@ -1,0 +1,25 @@
+# Dockerfile.dev
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    FLASK_APP=wsgi.py \
+    FLASK_ENV=development \
+    FLASK_RUN_HOST=0.0.0.0 \
+    FLASK_RUN_PORT=8001 \
+    PYTHONPATH=/app \
+    PYTHONIOENCODING=UTF-8
+
+WORKDIR /app
+
+# dipendenze native (lxml)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential libxml2-dev libxslt1-dev \
+ && rm -rf /var/lib/apt/lists/*
+
+# requirements
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --upgrade pip && pip install -r /tmp/requirements.txt
+
+# in dev montiamo il codice con bind mount
+CMD ["flask", "run", "--host=0.0.0.0", "--port=8001", "--reload"]

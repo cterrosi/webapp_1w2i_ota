@@ -1,0 +1,473 @@
+{% extends "base.html" %}
+{% block title %}{{ p.tour_activity_name }} – Details{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h2 class="mb-0">{{ p.tour_activity_name }}</h2>
+</div>
+
+<div class="row g-3">
+    <div class="col-md-6">
+        <table class="table table-sm table-bordered">
+            <tbody>
+                <tr><th class="bg-light">ID</th><td>{{ p.id }}</td></tr>
+                <tr><th class="bg-light">TourActivityCode</th><td>{{ p.tour_activity_code }}</td></tr>
+                <tr><th class="bg-light">City</th><td>{{ p.city_code }}</td></tr>
+                <tr><th class="bg-light">Country</th><td>{{ p.country_iso }} - {{ p.country_name }}</td></tr>
+                <tr><th class="bg-light">Type</th><td>{{ p.product_type_name or p.product_type }}</td></tr>
+                <tr><th class="bg-light">Category</th><td>{{ p.category_code }} ({{ p.category_detail }})</td></tr>
+            </tbody>
+        </table>
+    </div>
+    <div class="col-md-6">
+        <table class="table table-sm table-bordered">
+            <tbody>
+                <tr><th class="bg-light">Package Name</th><td>{{ detail.name or p.tour_activity_name }}</td></tr>
+                <tr><th class="bg-light">Duration</th><td>{{ detail.duration or '—' }}</td></tr>
+                <tr><th class="bg-light">City</th><td>{{ detail.city or p.city_code }}</td></tr>
+                <tr><th class="bg-light">Nation</th><td>{{ detail.country or (p.country_iso ~ ' ' ~ p.country_name) }}</td></tr>
+                <tr><th class="bg-light">Category</th><td>{{ detail.categories|join(', ') if detail.categories else '—' }}</td></tr>
+                <tr><th class="bg-light">Type</th><td>{{ detail.types|join(', ') if detail.types else '—' }}</td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+{% if request.args.get('avail') == '1' %}
+<div class="alert alert-success mt-3">Availabilty OK. Total: {{ request.args.get('total') }} {{ request.args.get('cur') }}</div>
+{% elif request.args.get('avail') == '0' %}
+<div class="alert alert-warning mt-3">Not available in these dates.</div>
+{% endif %}
+
+{% if request.args.get('quote') == '1' %}
+<div class="alert alert-info mt-3">
+    Quotazione: {{ request.args.get('qtotal') }} {{ request.args.get('qcur') }}
+    <small class="text-muted">({{ request.args.get('qstatus') }})</small>
+</div>
+{% endif %}
+
+
+<h4 class="mt-4">Availability / Quote</h4>
+<form id="availForm"
+      class="row g-2 align-items-end"
+      method="post"
+      action="{{ url_for('products.ota_product_availability', product_id=p.id) }}">
+
+    <input type="hidden" name="action" value="availability">
+
+    <div class="col-auto">
+        <label class="form-label">From</label>
+        <input id="start_date" class="form-control" type="date" name="start_date" required>
+    </div>
+
+    <div class="col-auto">
+        <label class="form-label">To</label>
+        <input id="end_date" class="form-control" type="date" name="end_date" readonly>
+    </div>
+
+    <div class="col-auto">
+        <label class="form-label">PAX</label>
+        <input id="units" class="form-control" type="number" name="units" value="2" min="1">
+    </div>
+
+    <div class="col-auto d-flex gap-2 align-items-end">
+        <button class="btn btn-outline-primary btn-sm d-inline-flex align-items-center" type="submit">
+            Check availability
+        </button>
+        <a class="btn btn-outline-secondary btn-sm d-inline-flex align-items-center" href="{{ url_for('products.ota_products') }}">← Back to list</a>
+    </div>
+</form>
+
+
+
+
+<!-- Flatpickr (CSS + JS + locale IT) -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
+<script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+<script src="https://cdn.jsdelivr.net/npm/flatpickr/dist/l10n/it.js"></script>
+
+
+<script>
+(function () {
+  const key        = "ota_avail_{{ p.id }}";
+  const formEl     = document.getElementById("availForm");
+  const startInput = document.getElementById("start_date");
+  const endInput   = document.getElementById("end_date");
+  const unitsInput = document.getElementById("units");
+
+  // No autofill
+  formEl.setAttribute("autocomplete","off");
+  [startInput,endInput,unitsInput].forEach(el => el && el.setAttribute("autocomplete","off"));
+  startInput && startInput.setAttribute("inputmode","none");
+
+  // Restore
+  try {
+    const saved = sessionStorage.getItem(key);
+    if (saved) {
+      const { start_date, end_date, units } = JSON.parse(saved);
+      if (start_date) startInput.value = start_date;
+      if (end_date)   endInput.value   = end_date;
+      if (units)      unitsInput.value = units;
+    }
+  } catch(_) {}
+
+  formEl.addEventListener("submit", function() {
+    try {
+      sessionStorage.setItem(key, JSON.stringify({
+        start_date: startInput.value || "",
+        end_date:   endInput.value   || "",
+        units:      unitsInput.value || "2"
+      }));
+    } catch(_) {}
+  });
+
+  function addDays(isoDate, days) {
+    const d = new Date(isoDate);
+    d.setDate(d.getDate() + (parseInt(days, 10) || 0));
+    return d.toISOString().slice(0,10);
+  }
+
+  // Disponibilità: YYYY-MM-DD -> durata notti
+  const deps = new Map();
+  let fp = null;
+
+  function initFlatpickr(){
+    if (fp) { fp.destroy(); fp = null; }
+
+    flatpickr.localize(flatpickr.l10ns.it);
+
+    fp = flatpickr(startInput, {
+      dateFormat: "Y-m-d",
+      disableMobile: true,
+      allowInput: true,
+      showMonths: 2,
+      inline: false,
+      locale: "it",
+      enable: [
+        function(date) {
+          const iso = new Date(date.getTime() - date.getTimezoneOffset()*60000).toISOString().slice(0,10);
+          return deps.has(iso);
+        }
+      ],
+      onOpen: function(){ startInput.blur(); },
+      onChange: function(_, dateStr){
+        if (deps.has(dateStr)) endInput.value = addDays(dateStr, deps.get(dateStr));
+      },
+      onDayCreate: function(_, __, ___, dayElem){
+        const d = dayElem.dateObj;
+        const iso = new Date(d.getTime() - d.getTimezoneOffset()*60000).toISOString().slice(0,10);
+        if (deps.has(iso)) {
+          dayElem.classList.add("available-day");
+          dayElem.title = `Disponibile (${deps.get(iso)} notti)`;
+        }
+      }
+    });
+  }
+
+  startInput.addEventListener("change", () => {
+    const val = startInput.value;
+    if (deps.has(val)) endInput.value = addDays(val, deps.get(val));
+  });
+
+  // ---- Fetch disponibilità per TourActivityCode (con fallback) ----
+  const CODE          = "{{ p.tour_activity_code }}";           // es: 0000RMFAKASSIA#FCO2
+  const URL_BY_CODE   = "/availability/departures/by-code?code=" + encodeURIComponent(CODE);
+  const URL_BY_PROD   = "{{ url_for('availability.departures_json', product_id=p.id) }}";
+  const URL_BY_DEST   = "/availability/departures/by-dest?dest={{ p.city_code }}";
+
+  function ingestRows(rows) {
+    let count = 0;
+    (rows || []).forEach(it => {
+      const d = it.date || it.depart_date || it.start_date;
+      const dur = Number(it.duration_days ?? it.nights ?? it.duration ?? 0);
+      if (d && dur > 0) { deps.set(d, dur); count++; }
+    });
+    return count;
+  }
+
+  function loadDeps(url) {
+    return fetch(url, {
+      credentials: "same-origin",
+      cache: "no-store",
+      headers: { "Accept": "application/json" }
+    })
+    .then(r => r.json())
+    .then(json => {
+      const rows = Array.isArray(json) ? json : (json.rows || []);
+      const ok   = Array.isArray(json) ? true : (json.ok !== false);
+      if (!ok) throw new Error(json.error || "Risposta non OK");
+      return ingestRows(rows);
+    });
+  }
+
+  (async function bootstrap() {
+    try {
+      let added = 0;
+
+      // 1) per TourActivityCode (INCLUSO #APT)
+      try { added = await loadDeps(URL_BY_CODE); } catch(e1){ console.warn("[deps] by-code failed:", e1); }
+
+      // 2) per product_id (compat)
+      if (!added) {
+        try { added = await loadDeps(URL_BY_PROD); } catch(e2){ console.warn("[deps] by-product failed:", e2); }
+      }
+
+      // 3) per dest (ultimo tentativo, più generico)
+      if (!added) {
+        try { added = await loadDeps(URL_BY_DEST); } catch(e3){ console.warn("[deps] by-dest failed:", e3); }
+      }
+
+      if (!added) console.warn("[deps] nessuna partenza caricata");
+      initFlatpickr();
+
+      if (startInput.value && deps.has(startInput.value)) {
+        endInput.value = addDays(startInput.value, deps.get(startInput.value));
+      }
+    } catch (err) {
+      console.error(err);
+      flatpickr.localize(flatpickr.l10ns.it);
+      fp = flatpickr(startInput, {
+        dateFormat: "Y-m-d",
+        disableMobile: true,
+        allowInput: true,
+        showMonths: 2,
+        inline: false,
+        locale: "it"
+      });
+    }
+  })();
+})();
+</script>
+
+
+
+
+<style>
+    /* ---- Flatpickr compatto e allineato su 7 colonne ---- */
+    .flatpickr-calendar {
+        font-size: 12px;
+    }
+
+    .flatpickr-weekdays .flatpickr-weekday {
+        font-size: 11px;
+    }
+
+    .flatpickr-current-month .flatpickr-monthDropdown-months,
+    .flatpickr-current-month .numInput.cur-year {
+        font-size: 13px;
+    }
+
+    /* 7 colonne per riga (fix intestazioni con 2 mesi) */
+    .flatpickr-days .dayContainer {
+        justify-content: flex-start !important;
+    }
+
+    .flatpickr-day {
+        width: calc(100%/7) !important; /* 7 colonne */
+        max-width: none !important;
+        height: 26px;
+        line-height: 26px; /* compatto */
+        margin: 0 !important;
+        color: #212529; /* giorni ben visibili */
+        box-sizing: border-box;
+        position: relative; /* per il pseudo-elemento */
+        overflow: hidden; /* evita sbordi dell'anello */
+        z-index: 1; /* testo sopra al ::before */
+    }
+
+        /* Giorni di altri mesi (servono per l’allineamento ma attenuati) */
+        .flatpickr-day.nextMonthDay,
+        .flatpickr-day.prevMonthDay {
+            color: #6c757d !important;
+        }
+
+        /* --- Evidenziazione partenze: ANELLO con gap --- */
+        .flatpickr-day.available-day {
+            background: transparent !important;
+            border: none !important;
+            color: #0a3622 !important;
+        }
+
+            .flatpickr-day.available-day::before {
+                content: "";
+                position: absolute;
+                inset: 2px; /* gap intorno */
+                border: 1px solid #198754;
+                background: rgba(25,135,84,.30);
+                border-radius: 6px;
+                z-index: 0; /* dietro al numero */
+                pointer-events: none;
+            }
+
+            .flatpickr-day.available-day:hover::before {
+                filter: brightness(.95);
+            }
+
+        /* --- Giorno selezionato: alto contrasto (blu) + testo bianco --- */
+        .flatpickr-day.selected,
+        .flatpickr-day.startRange,
+        .flatpickr-day.endRange {
+            background: #0d6efd !important; /* celeste bootstrap */
+            border-color: #0d6efd !important;
+            color: #fff !important; /* testo bianco */
+        }
+            /* niente anello verde quando il giorno è selezionato */
+            .flatpickr-day.selected.available-day::before,
+            .flatpickr-day.startRange.available-day::before,
+            .flatpickr-day.endRange.available-day::before {
+                display: none !important;
+            }
+</style>
+
+{% if detail.image_urls %}
+<h4 class="mt-4">Immagini</h4>
+<div class="d-flex flex-wrap gap-2">
+    {% for url in detail.image_urls %}
+    <div>
+        <img src="{{ url }}" class="rounded border" style="width: 150px; height: 100px; object-fit: cover;">
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
+{% if detail.pickup_notes %}
+<h4 class="mt-4">Pickup/Dropoff</h4>
+<ul>
+    {% for t in detail.pickup_notes %}
+    <li>{{ t }}</li>
+    {% endfor %}
+</ul>
+{% endif %}
+
+{% if detail.descriptions %}
+<h4 class="mt-4">Descrizione</h4>
+<div class="ota-desc mt-2">
+    {% for d in detail.descriptions %}
+    <div class="mb-2">{{ d|safe }}</div>
+    {% endfor %}
+</div>
+{% endif %}
+
+<style>
+    /* Tabs compatti e scrollabili se tanti */
+    .ota-tabs .nav-tabs {
+        overflow-x: auto;
+        flex-wrap: nowrap;
+        gap: .25rem;
+        border-bottom: 1px solid var(--bs-border-color);
+    }
+
+    .ota-tabs .nav-item {
+        white-space: nowrap;
+    }
+
+    .ota-tabs .nav-link {
+        font-weight: 600;
+        font-size: .95rem;
+        border-radius: .5rem .5rem 0 0;
+    }
+
+    .ota-tabs .tab-content {
+        border: 1px solid var(--bs-border-color);
+        border-top: none;
+        padding: .75rem;
+        border-radius: 0 0 .5rem .5rem;
+    }
+</style>
+
+<script>
+    (function buildOtaTabs() {
+        const root = document.querySelector('.ota-desc');
+        if (!root) return;
+
+        // prendi i nodi originali (li sposteremo dentro i pannelli)
+        const nodes = Array.from(root.childNodes);
+
+        const norm = s => (s || '').replace(/\u00A0/g, ' ').replace(/\s+/g, ' ').trim();
+        const isShortTitle = t => {
+            const txt = norm(t).replace(/[:：]$/, '');        // consenti i due punti finali
+            if (!txt) return false;
+            const words = txt.split(' ').filter(Boolean).length;
+            return words <= 4 && txt.length <= 28;           // “Località”, “Camere”, “Spiaggia”, …
+        };
+
+        function isTitleNode(n) {
+            if (!n || n.nodeType !== 1) return false;
+            const tag = n.tagName.toLowerCase();
+            if (/^h[1-6]$/.test(tag)) return isShortTitle(n.textContent);
+            if (tag === 'p' || tag === 'div') {
+                const strong = n.querySelector('strong,b');
+                if (!strong) return false;
+                const titleText = norm(strong.textContent);
+                // il contenitore ha altro testo oltre al bold?
+                const clone = n.cloneNode(true);
+                clone.querySelectorAll('strong,b').forEach(x => x.remove());
+                const leftover = norm(clone.textContent);
+                return isShortTitle(titleText) && (leftover === '' || leftover === ':');
+            }
+            return false;
+        }
+        const cleanTitle = n => norm(n.textContent).replace(/[:：]$/, '');
+
+        // split in sezioni
+        const sections = [];
+        let cur = { title: 'Panoramica', nodes: [] };
+        for (const n of nodes) {
+            if (n.nodeType === 3 && !norm(n.textContent)) continue; // ignora whitespace
+            if (isTitleNode(n)) {
+                if (cur.nodes.length) sections.push(cur);
+                cur = { title: cleanTitle(n), nodes: [] };
+                continue; // non includere il titolo nel contenuto
+            }
+            cur.nodes.push(n);
+        }
+        if (cur.nodes.length) sections.push(cur);
+
+        // se non abbiamo trovato titoli, lasciamo tutto com'è
+        if (sections.length <= 1) return;
+
+        // costruisci tabs Bootstrap
+        const wrap = document.createElement('div');
+        wrap.className = 'ota-tabs';
+
+        const nav = document.createElement('ul');
+        nav.className = 'nav nav-tabs';
+        nav.setAttribute('role', 'tablist');
+
+        const content = document.createElement('div');
+        content.className = 'tab-content';
+
+        sections.forEach((sec, i) => {
+            const id = 'otaTab_' + i;
+
+            const li = document.createElement('li');
+            li.className = 'nav-item'; li.setAttribute('role', 'presentation');
+
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'nav-link' + (i === 0 ? ' active' : '');
+            btn.setAttribute('data-bs-toggle', 'tab');
+            btn.setAttribute('data-bs-target', '#' + id);
+            btn.setAttribute('role', 'tab');
+            btn.textContent = sec.title || ('Sezione ' + (i + 1));
+
+            li.appendChild(btn);
+            nav.appendChild(li);
+
+            const pane = document.createElement('div');
+            pane.className = 'tab-pane fade' + (i === 0 ? ' show active' : '');
+            pane.id = id; pane.setAttribute('role', 'tabpanel');
+
+            sec.nodes.forEach(node => pane.appendChild(node));
+            content.appendChild(pane);
+        });
+
+        // sostituisci il contenuto
+        root.innerHTML = '';
+        root.appendChild(wrap);
+        wrap.appendChild(nav);
+        wrap.appendChild(content);
+    })();
+</script>
+
+
+{% endblock %}

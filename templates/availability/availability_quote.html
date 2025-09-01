@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% block title %}Quotation request{% endblock %}
+{% block content %}
+<div class="container-xxl py-4">
+    <div class="d-flex align-items-center justify-content-between mb-3">
+        <h3 class="mb-0">Quotation request</h3>
+        <a class="btn btn-outline-secondary d-none d-md-inline"
+           href="{{ url_for('products.ota_product_detail', product_id=product_id) }}">
+            Cancel
+        </a>
+    </div>
+
+    <form method="post" class="needs-validation" novalidate>
+
+        <div class="row g-3">
+            <div class="col-12 col-lg-6">
+                <label class="form-label">Booking Code</label>
+                <!-- solo display -->
+                <input class="form-control" value="{{ booking_code | default('', true) }}" readonly>
+                <!-- quello che va nella POST -->
+                <input type="hidden" name="booking_code" value="{{ booking_code | default('', true) }}">
+            </div>
+
+            <div class="col-6 col-lg-3">
+                <label class="form-label">Check-in</label>
+                <input class="form-control" value="{{ start_date | default('', true) }}" readonly>
+                <input type="hidden" name="start_date" value="{{ start_date | default('', true) }}">
+            </div>
+
+            <div class="col-6 col-lg-3">
+                <label class="form-label">Check-out</label>
+                <input class="form-control" value="{{ end_date | default('', true) }}" readonly>
+                <input type="hidden" name="end_date" value="{{ end_date | default('', true) }}">
+            </div>
+
+            <div class="col-12 col-lg-4">
+                <label class="form-label">Rate Plan (opz.)</label>
+                <input class="form-control" value="{{ rate_plan_code | default('', true) }}" readonly>
+                <input type="hidden" name="rate_plan_code" value="{{ rate_plan_code | default('', true) }}">
+            </div>
+
+            <div class="col-12 col-lg-4">
+                <label class="form-label">Chain Code</label>
+                <input class="form-control" value="{{ (chain_code or 'SANDTOUR') | default('SANDTOUR', true) }}" readonly>
+                <input type="hidden" name="chain_code" value="{{ (chain_code or 'SANDTOUR') | default('SANDTOUR', true) }}">
+            </div>
+
+            <div class="col-12 col-lg-4">
+                <label class="form-label">Ref. richiesta</label>
+                <input class="form-control" name="res_id_value" value="{{ '123456789' }}">
+            </div>
+        </div>
+
+
+        <hr class="my-4">
+
+        <h5 class="mb-3">Ospiti</h5>
+        <div class="row g-3">
+            {% for g in guests %}
+            <div class="col-12 col-xl-6">
+                <div class="card h-100">
+                    <div class="card-body">
+                        <div class="row g-2">
+                            <div class="col-4 col-md-2">
+                                <label class="form-label">RPH</label>
+                                <input class="form-control" value="{{ g.rph }}" readonly>
+                            </div>
+                            <div class="col-8 col-md-5">
+                                <label class="form-label">Name</label>
+                                <input class="form-control" name="guest_{{g.rph}}_given" value="{{ g.given }}">
+                            </div>
+                            <div class="col-12 col-md-5">
+                                <label class="form-label">Surname</label>
+                                <input class="form-control" name="guest_{{g.rph}}_surname" value="{{ g.surname }}">
+                            </div>
+                            <div class="col-12 col-md-7">
+                                <label class="form-label">Email</label>
+                                <input class="form-control" name="guest_{{g.rph}}_email" value="{{ g.email }}">
+                            </div>
+                            <div class="col-12 col-md-5">
+                                <label class="form-label">Birth date (YYYY-MM-DD)</label>
+                                <input class="form-control" name="guest_{{g.rph}}_birthdate" value="{{ g.birthdate }}">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+
+        <!-- Barra azioni: sticky su desktop, full-width su mobile -->
+        <div class="bg-body mt-4 pt-3">
+            <div class="d-grid gap-2 d-md-flex justify-content-md-end">
+                <a class="btn btn-outline-secondary btn-lg order-2 order-md-1"
+                   href="{{ url_for('products.ota_product_detail', product_id=product_id) }}">
+                    Cancel
+                </a>
+                <button class="btn btn-success btn-lg order-1 order-md-2" type="submit">
+                    Request quotation
+                </button>
+            </div>
+        </div>
+    </form>
+</div>
+<script>
+document.querySelector('form').addEventListener('submit', function (e) {
+  const bc = document.querySelector('input[name="booking_code"]').value.trim();
+  if (!bc) {
+    e.preventDefault();
+    alert('Manca il Booking Code: torna alla pagina precedente e seleziona un’opzione.');
+  }
+});
+</script>
+
+{% endblock %}

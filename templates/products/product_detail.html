@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+
+{% block title %}{{ product.internalName }} - {{ product.id }}{% endblock %}
+
+{% block content %}
+  <h1>{{ product.internalName }}</h1>
+  <h1>ID: {{ product.id }}</h1>
+  <p><strong>Reference:</strong> {{ product.reference }}</p>
+
+  {% if product.options %}
+    <h3>Options</h3>
+    {% for option in product.options %}
+      <div class="card">
+        <h4>{{ option.internalName }} <small>({{ option.reference }})</small></h4>
+        <p><strong>Cancellation:</strong> {{ option.cancellationCutoff }}</p>
+        <p><strong>Min Units:</strong> {{ option.restrictions.minUnits }},
+           <strong>Max Units:</strong> {{ option.restrictions.maxUnits }}</p>
+
+        {% if option.units %}
+          <table>
+            <thead>
+              <tr>
+                <th>Type</th>
+                <th>Age</th>
+                <th>Pax Count</th>
+                <th>Min Qty</th>
+                <th>Max Qty</th>
+                <th>Accompanied By</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for unit in option.units %}
+                <tr>
+                  <td>{{ unit.type }}</td>
+                  <td>{{ unit.restrictions.minAge }} - {{ unit.restrictions.maxAge }}</td>
+                  <td>{{ unit.restrictions.paxCount }}</td>
+                  <td>{{ unit.restrictions.minQuantity }}</td>
+                  <td>{{ unit.restrictions.maxQuantity }}</td>
+                  <td>
+                    {% if unit.restrictions.accompaniedBy %}
+                      {{ unit.restrictions.accompaniedBy | join(', ') }}
+                    {% else %}
+                      -
+                    {% endif %}
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        {% else %}
+          <p><em>Nessuna unità disponibile</em></p>
+        {% endif %}
+      </div>
+    {% endfor %}
+  {% else %}
+    <p><em>Nessuna opzione disponibile.</em></p>
+  {% endif %}
+
+  <a class="btn btn-secondary mt-3" href="/products">← Torna alla lista</a>
+{% endblock %}

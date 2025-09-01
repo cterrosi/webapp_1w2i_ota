@@ -1,0 +1,384 @@
+﻿{% extends "base.html" %}
+
+{% block title %}Availability Grouped{% endblock %}
+
+{% block content %}
+<div class="container-xxl py-3">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+
+        <h3 class="mb-0">
+            Availability
+        </h3>
+        <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('home.home') }}">Home</a>
+    </div>
+
+    <div class="mb-3 small text-muted">
+        <strong>Search:</strong>
+        {{ meta.request.destina }} from {{ meta.request.aptfrom or 'ANY' }},
+        {{ meta.request.start_date }} → {{ meta.request.end_date }}
+        ({{ meta.request.nights }} nights) · Rooms {{ meta.request.rooms }},
+        Adults {{ meta.request.adults }}{% if meta.request.children_ages %}, Children {{ meta.request.children_ages|join(', ') }},
+        Currency {{ meta.request.currency }}
+        {% endif %}
+    </div>
+
+    {% if meta.raw_errors %}
+    <div class="alert alert-warning">
+        <strong>Warnings:</strong>
+        <ul class="mb-0">
+            {% for e in meta.raw_errors %}
+            <li>{{ e }}</li>
+            {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+
+    {% set pax = (meta.request.adults or 0) + ((meta.request.children_ages|length) if meta.request.children_ages else 0) %}
+    {% set pax = pax if pax > 0 else 1 %}
+
+    {% if groups and groups|length %}
+    {% for g in groups %}
+    {% set sample_offer = (g.offers[0] if g.offers and g.offers|length else None) %}
+
+    <div class="card mb-3 shadow-sm">
+        <div class="card-body">
+
+            {# RIGA 1: immagine • testo • prezzo #}
+            <div class="row g-3 align-items-center">
+                {% if g.image %}
+                <div class="col-md-auto">
+                    <img src="{{ g.image }}" class="rounded border object-fit-cover" style="width:200px; height:130px;">
+                </div>
+                {% endif %}
+
+                <div class="col">
+                    <h5 class="mb-1">
+                        {{ g.name }}
+                        {% if g.is_recommended %}
+                        <span class="badge text-bg-success align-middle ms-1">Consigliato</span>
+                        {% endif %}
+                    </h5>
+
+                    <div class="small text-muted">
+                        {% if sample_offer and sample_offer.booking_code %}
+                        Booking code: <code>{{ sample_offer.booking_code }}</code>
+                        {% else %}
+                        Codice prodotto: <code>{{ g.product_core }}</code>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <div class="col-md-3 col-lg-2 text-end">
+                    {% if g.min_price != None %}
+                    <div class="fw-bold fs-3 lh-1">
+                        {{ (((g.min_price|float) / pax) | round(0, 'common') | int) }} {{ meta.currency or g.currency }}
+                    </div>
+                    <div class="small text-muted">prezzo a persona</div>
+                    {% endif %}
+                </div>
+            </div>
+
+            {# RIGA 2: short description full width #}
+            {% if g.short_desc %}
+            <div class="row mt-2">
+                <div class="col-12">
+                    <hr class="my-2" style="width:140px; opacity:.25;">
+                    <div class="small text-muted">
+                        <span class="fw-semibold fst-italic">{{ g.short_desc | truncate(380, True) }}</span>
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+
+            {# RIGA 3: tabella voli full width #}
+            {% if g.flight_solutions and g.flight_solutions|length %}
+            <div class="row mt-3">
+                <div class="col-12">
+                    <div class="fw-semibold small mb-1">Flights</div>
+                    <div class="table-responsive">
+                        <table class="table table-sm table-bordered align-middle mb-0 table-flight w-100">
+
+                            <thead class="table-light">
+                                <tr>
+                                    <th class="col-airline">Airline</th>
+                                    <th class="col-nr">Flight</th>        {# OUT flight nr subito dopo Airline #}
+                                    <th class="col-pair">Outbound</th>    {# es. FCO → RMF #}
+                                    <th class="col-route">Out</th>        {# tratte + orari #}
+                                    <th class="col-nr">Flight</th>        {# IN flight nr #}
+                                    <th class="col-route">In</th>         {# tratte + orari #}
+                                    <th class="col-pair">Return</th>      {# es. RMF → FCO #}
+                                    <th class="text-center col-duration">Duration</th>
+                                    <th class="text-end col-price">Price</th>
+                                    <th class="text-end col-action"></th> {# Select, stretta #}
+                                </tr>
+                            </thead>
+
+
+
+                            <tbody>
+                                {% for s in g.flight_solutions %}
+                                {% set out_legs = s.samples | selectattr('od_rph','equalto','1') | list %}
+                                {% set in_legs  = s.samples | selectattr('od_rph','equalto','2') | list %}
+                                {% set direct_out = (out_legs|length == 1) %}
+                                {% set direct_in  = (in_legs|length == 1) %}
+
+                                {% set seg0 = (out_legs[0] if out_legs else (in_legs[0] if in_legs else None)) %}
+                                {% set vettore = '-' %}
+                                {% if seg0 %}
+                                {% if seg0.marketing and (seg0.marketing.name or seg0.marketing.code) %}
+                                {% set vettore = seg0.marketing.name or seg0.marketing.code %}
+                                {% elif seg0.operating and (seg0.operating.name or seg0.operating.code) %}
+                                {% set vettore = seg0.operating.name or seg0.operating.code %}
+                                {% endif %}
+                                {% endif %}
+
+                                {% set out_start = (out_legs[0].departure.datetime if out_legs else '') %}
+                                {% set out_end   = (out_legs[-1].arrival.datetime    if out_legs else '') %}
+                                {% set in_start  = (in_legs[0].departure.datetime    if in_legs else '') %}
+                                {% set in_end    = (in_legs[-1].arrival.datetime     if in_legs else '') %}
+
+                                {% set out_pair = ((out_legs[0].departure.airport ~ ' → ' ~ out_legs[-1].arrival.airport) if out_legs else '-') %}
+                                {% set in_pair  = ((in_legs[0].departure.airport  ~ ' → ' ~ in_legs[-1].arrival.airport)  if in_legs  else '-') %}
+
+                                <tr data-out-start="{{ out_start }}"
+                                    data-out-end="{{ out_end }}"
+                                    data-in-start="{{ in_start }}"
+                                    data-in-end="{{ in_end }}"
+                                    data-out-legs="{{ out_legs|length }}"
+                                    data-in-legs="{{ in_legs|length }}">
+
+                                    <td class="small">{{ vettore }}</td>
+
+                                    {# Flight (OUT) — colonna stretta #}
+                                    <td class="small col-nr">
+                                        {% if out_legs and out_legs|length %}
+                                        {% for f in out_legs %}<div>{{ f.flight_number }}</div>{% endfor %}
+                                        {% else %}-{% endif %}
+                                    </td>
+
+                                    {# Outbound pair (FCO → RMF) #}
+                                    <td class="small col-pair">{{ out_pair }}</td>
+
+                                    {# OUT: solo orari #}
+                                    <td class="small col-route">
+                                        {% if out_legs and out_legs|length %}
+                                        {% for f in out_legs %}
+                                        <div class="text-muted">
+                                            <time class="dt" data-iso="{{ f.departure.datetime }}"></time>
+                                            →
+                                            <time class="dt" data-iso="{{ f.arrival.datetime }}"></time>
+                                        </div>
+                                        {% endfor %}
+                                        {% else %}-{% endif %}
+                                    </td>
+
+                                    {# Flight (IN) — colonna stretta #}
+                                    <td class="small col-nr">
+                                        {% if in_legs and in_legs|length %}
+                                        {% for f in in_legs %}<div>{{ f.flight_number }}</div>{% endfor %}
+                                        {% else %}-{% endif %}
+                                    </td>
+
+                                    {# IN: solo orari #}
+                                    <td class="small col-route">
+                                        {% if in_legs and in_legs|length %}
+                                        {% for f in in_legs %}
+                                        <div class="text-muted">
+                                            <time class="dt" data-iso="{{ f.departure.datetime }}"></time>
+                                            →
+                                            <time class="dt" data-iso="{{ f.arrival.datetime }}"></time>
+                                        </div>
+                                        {% endfor %}
+                                        {% else %}-{% endif %}
+                                    </td>
+
+                                    {# Return pair (RMF → FCO) #}
+                                    <td class="small col-pair">{{ in_pair }}</td>
+
+                                    {# Durata compatta e centrata #}
+                                    <td class="small text-center col-duration">
+                                        <div class="d-flex flex-column align-items-center gap-1">
+                                            <span class="js-dur-out fw-semibold">–</span>
+                                            {% if direct_out %}
+                                            <span class="badge badge-direct rounded-pill bg-success-subtle text-success border border-success-subtle">Direct flight</span>
+                                            {% endif %}
+
+                                            <span class="js-dur-in fw-semibold mt-1">–</span>
+                                            {% if direct_in %}
+                                            <span class="badge badge-direct rounded-pill bg-success-subtle text-success border border-success-subtle">Direct flight</span>
+                                            {% endif %}
+                                        </div>
+                                    </td>
+
+
+                                    <td class="text-end small">
+                                        {{ (((s.min_price|float) / pax) | round(0, 'common') | int) }} {{ meta.currency or g.currency }}
+                                    </td>
+
+                                    <td class="text-end col-action">
+                                        <form method="post" action="{{ url_for('availability.product_detail') }}" class="mb-0">
+                                            <input type="hidden" name="package_code" value="{{ s.package_code }}">
+                                            <input type="hidden" name="product_core" value="{{ g.product_core }}">
+                                            <input type="hidden" name="start_date" value="{{ meta.request.start_date }}">
+                                            <input type="hidden" name="end_date" value="{{ meta.request.end_date }}">
+                                            <input type="hidden" name="aptfrom" value="{{ meta.request.aptfrom }}">
+                                            <input type="hidden" name="adults" value="{{ meta.request.adults }}">
+                                            {% if meta.request.children_ages %}
+                                            <input type="hidden" name="children_ages" value="{{ meta.request.children_ages | join(',') }}">
+                                            {% endif %}
+                                            {% if g.image %}
+                                            <input type="hidden" name="image" value="{{ g.image }}">
+                                            {% endif %}
+                                            <input type="hidden" name="flights_json" value='{{ s.samples | tojson | e }}'>
+                                            <input type="hidden" name="flight_vettore" value="{{ vettore|default('') }}">
+                                            <input type="hidden" name="pp_price" value="{{ (((s.min_price|float) / pax) | round(0, 'common') | int) }}">
+                                            <input type="hidden" name="currency" value="{{ meta.currency or g.currency }}">
+                                            <button class="btn btn-primary btn-sm px-2" type="submit">Select</button>
+                                        </form>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+
+
+                        </table>
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+
+            <details class="mt-3">
+                <summary class="small text-primary" style="cursor:pointer;">Dettagli tecnici</summary>
+                <pre class="small bg-light p-2 rounded border">{{ g | tojson(indent=2) }}</pre>
+            </details>
+
+        </div>
+    </div>
+    {% endfor %}
+    {% else %}
+    <div class="alert alert-info">No availability for the selected criteria.</div>
+    {% endif %}
+</div>
+
+<!-- Shared spinner overlay -->
+<div id="globalSpinner" class="position-fixed top-0 start-0 w-100 h-100 d-none"
+     style="background: rgba(255,255,255,.6); z-index: 2000;">
+    <div class="position-absolute top-50 start-50 translate-middle text-center">
+        <div class="spinner-border" role="status" aria-label="Loading..."></div>
+        <div class="mt-2 small text-muted">Loading…</div>
+    </div>
+</div>
+
+<style>
+    .table-flight {
+        width: 100%;
+    }
+
+        .table-flight th, .table-flight td {
+            white-space: nowrap;
+            vertical-align: top;
+            padding: .35rem .5rem;
+        }
+            /* tratte lunghe possono andare a capo */
+            .table-flight td.col-route {
+                white-space: normal;
+            }
+
+        /* header compatti */
+        .table-flight thead th {
+            font-size: .85rem;
+        }
+
+        /* larghezze */
+        .table-flight .col-airline {
+            width: 11rem;
+        }
+
+        .table-flight .col-nr {
+            width: 4.25rem;
+        }
+        /* più strette per i numeri volo */
+        .table-flight .col-nr {
+            width: 3.75rem;
+        }
+        /* FCO → RMF / RMF → FCO */
+        .table-flight .col-duration {
+            width: 7.25rem;
+            text-align: center;
+        }
+        /* duration più stretta */
+        .table-flight .col-price {
+            width: 7rem;
+        }
+
+        .table-flight .col-action {
+            width: 5rem;
+        }
+
+    /* badge piccolo */
+    .badge-direct {
+        font-size: .65rem;
+    }
+</style>
+
+
+
+<script>
+    // Format <time.dt> in locale
+    (function () {
+        try {
+            const fmt = new Intl.DateTimeFormat(navigator.language || undefined, {
+                dateStyle: 'short',
+                timeStyle: 'short'
+            });
+            document.querySelectorAll('time.dt[data-iso]').forEach(el => {
+                const iso = el.getAttribute('data-iso');
+                if (!iso) return;
+                const d = new Date(iso);
+                el.textContent = isNaN(+d) ? iso : fmt.format(d);
+                el.title = iso;
+            });
+        } catch (e) { }
+    })();
+
+    // Calcola durata OUT/IN (ISO con timezone → corretto con fusi)
+    (function () {
+        function fmtDur(ms) {
+            const mins = Math.max(0, Math.round(ms / 60000));
+            const h = Math.floor(mins / 60), m = mins % 60;
+            return h + 'h ' + (m < 10 ? '0' + m : m) + 'm';
+        }
+        document.querySelectorAll('table.table-flight tbody tr').forEach(tr => {
+            const os = tr.dataset.outStart, oe = tr.dataset.outEnd;
+            const is = tr.dataset.inStart, ie = tr.dataset.inEnd;
+            const outEl = tr.querySelector('.js-dur-out');
+            const inEl = tr.querySelector('.js-dur-in');
+            try {
+                if (os && oe && outEl) {
+                    const d1 = new Date(os), d2 = new Date(oe);
+                    if (!isNaN(+d1) && !isNaN(+d2)) outEl.textContent = fmtDur(d2 - d1);
+                }
+                if (is && ie && inEl) {
+                    const d1 = new Date(is), d2 = new Date(ie);
+                    if (!isNaN(+d1) && !isNaN(+d2)) inEl.textContent = fmtDur(d2 - d1);
+                }
+            } catch (_) { }
+        });
+    })();
+
+    // Spinner su submit al dettaglio
+    (() => {
+        const spinner = document.getElementById('globalSpinner');
+        const showSpinner = on => spinner && spinner.classList.toggle('d-none', !on);
+        document.addEventListener('submit', (ev) => {
+            const f = ev.target;
+            if (!(f instanceof HTMLFormElement)) return;
+            try {
+                const action = (f.getAttribute('action') || '').toLowerCase();
+                if (action.includes('/availability/product_detail')) showSpinner(true);
+            } catch (_) { }
+        });
+        window.addEventListener('pageshow', () => showSpinner(false));
+    })();
+</script>
+{% endblock %}

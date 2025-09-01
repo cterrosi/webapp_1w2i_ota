@@ -1,0 +1,17 @@
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    image: webapp_1w2i_ota:dev
+    container_name: webapp_1w2i_ota_dev
+    command: flask run --host=0.0.0.0 --port=8001 --reload
+    ports:
+      - "5001:8001"                     # dev su http://localhost:5001
+    environment:
+      FLASK_APP: wsgi.py
+      FLASK_ENV: development
+      FLASK_DEBUG: "1"
+      PYTHONPATH: /app
+    volumes:
+      - .:/app                          # monta tutta la repo

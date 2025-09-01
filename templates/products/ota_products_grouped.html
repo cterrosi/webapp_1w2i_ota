@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% block title %}OTA Products {% endblock %}
+{% block content %}
+
+<h2 class="mb-3">
+    Cached Packages: (Grouped {{ total_groups }} - Total {{ total_items }})
+</h2>
+
+<div class="accordion" id="prodAccordion">
+    {% for g in groups %}
+    <div class="accordion-item">
+        <h2 class="accordion-header" id="h_{{ loop.index }}">
+            <button class="accordion-button collapsed" type="button"
+                    data-bs-toggle="collapse" data-bs-target="#c_{{ loop.index }}"
+                    aria-expanded="false" aria-controls="c_{{ loop.index }}">
+                <div class="d-flex flex-column w-100">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span class="fw-semibold">{{ g.name or g.core }}</span>
+                        <span class="badge text-bg-secondary">{{ g['items']|length }}</span>
+                    </div>
+                    <small class="text-muted">
+                        Core: <code>{{ g.core }}</code>
+                        {% if g.city %} &middot; City: {{ g.city }}{% endif %}
+                        {% if g.country %} &middot; {{ g.country }}{% endif %}
+                    </small>
+                </div>
+            </button>
+        </h2>
+
+        {# Thumb e aeroporti: SEMPRE visibili (fuori dalla collapse) #}
+        <div class="px-3 pt-3 pb-2">
+            <div class="d-flex align-items-center gap-3 flex-wrap">
+
+                {% if g.image %}
+                <img src="{{ g.image }}" alt="" class="rounded border"
+                     style="width:160px;height:auto;object-fit:cover;">
+                {% endif %}
+
+                {% set deps = g['items'] | groupby('dep') %}
+                {% if deps | list | length > 0 %}
+                <div class="d-flex align-items-center flex-wrap gap-2">
+                    <span class="small text-muted me-1">Aeroporti:</span>
+                    {% for grp in deps %}
+                    {% set first = grp.list[0] %}
+                    <a class="btn btn-sm btn-outline-primary"
+                       href="{{ url_for('products.ota_product_detail', product_id=first.id) }}">
+                        {{ grp.grouper or 'N/A' }}
+                    </a>
+                    {% endfor %}
+                </div>
+                {% endif %}
+
+                <button class="btn btn-sm btn-link ms-auto"
+                        type="button"
+                        data-bs-toggle="collapse"
+                        data-bs-target="#c_{{ loop.index }}"
+                        aria-expanded="false"
+                        aria-controls="c_{{ loop.index }}">
+                    Mostra elenco varianti
+                </button>
+            </div>
+        </div>
+
+        <div id="c_{{ loop.index }}" class="accordion-collapse collapse"
+             aria-labelledby="h_{{ loop.index }}" data-bs-parent="#prodAccordion">
+            <div class="accordion-body">
+
+                <div class="table-responsive">
+                    <table class="table table-sm table-striped table-bordered align-middle">
+                        <thead class="table-light">
+                            <tr>
+                                <th>ID</th>
+                                <th>Airport</th>
+                                <th>Nome</th>
+                                <th>TourActivityCode</th>
+                                <th>Apri</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for item in g['items'] %}
+                            <tr>
+                                <td>{{ item.id }}</td>
+                                <td>{{ item.dep or '-' }}</td>
+                                <td>{{ item.name }}</td>
+                                <td><code>{{ item.code }}</code></td>
+                                <td>
+                                    <a class="btn btn-sm btn-primary"
+                                       href="{{ url_for('products.ota_product_detail', product_id=item.id) }}">
+                                        Dettaglio
+                                    </a>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+
+            </div>
+        </div>
+    </div>
+    {% else %}
+    <div class="alert alert-warning">Nessun prodotto trovato.</div>
+    {% endfor %}
+</div>
+
+<a class="btn btn-secondary mt-3" href="{{ url_for('home.home') }}">Torna alla Home.home</a>
+{% endblock %}

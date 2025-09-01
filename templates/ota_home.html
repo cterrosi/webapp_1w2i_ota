@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}OTA Settings{% endblock %}
+{% block content %}
+<h2 class="mb-3">OTA API Settings (handle with care!)</h2>
+<form method="post">
+  <div class="row g-3">
+    <div class="col-md-6">
+      <label class="form-label">OTAbaseUrl</label>
+      <input class="form-control" name="base_url" value="{{ s.base_url }}" placeholder="http://api.1way2italy.it/service/test/v10/otaservice">
+      <div class="form-text">Inserisci solo la base URL (non includere /TourActivityProduct).</div>
+    </div>
+    <div class="col-md-3">
+      <label class="form-label">Target</label>
+      <input class="form-control" name="target" value="{{ s.target }}">
+    </div>
+    <div class="col-md-3">
+      <label class="form-label">PrimaryLangID</label>
+      <input class="form-control" name="primary_lang" value="{{ s.primary_lang }}">
+    </div>
+
+    <div class="col-md-4">
+      <label class="form-label">RequestorID</label>
+      <input class="form-control" name="requestor_id" value="{{ s.requestor_id }}">
+    </div>
+    <div class="col-md-4">
+      <label class="form-label">MessagePassword</label>
+      <input class="form-control" name="message_password" value="{{ s.message_password }}">
+    </div>
+    <div class="col-md-4">
+      <label class="form-label">ChainCode</label>
+      <input class="form-control" name="chain_code" value="{{ s.chain_code }}">
+    </div>
+
+    <div class="col-md-4">
+      <label class="form-label">ProductType</label>
+      <input class="form-control" name="product_type" value="{{ s.product_type }}">
+    </div>
+    <div class="col-md-4">
+      <label class="form-label">CategoryCode</label>
+      <input class="form-control" name="category_code" value="{{ s.category_code }}">
+    </div>
+    <div class="col-md-4">
+      <label class="form-label">CityCode (opz.)</label>
+      <input class="form-control" name="city_code" value="{{ s.city_code }}">
+    </div>
+    <div class="col-md-6">
+      <label class="form-label">TourActivityCode (opz.)</label>
+      <input class="form-control" name="tour_activity_code" value="{{ s.tour_activity_code }}">
+    </div>
+  </div>
+  <button class="btn btn-success mt-3" type="submit">Salva</button>
+  <a class="btn btn-warning mt-3" href="{{ url_for('products.ota_update_products') }}">Aggiorna prodotti OTA</a>
+  <a class="btn btn-info mt-3" href="{{ url_for('products.ota_products') }}">Vedi prodotti OTA</a>
+</form>
+{% endblock %}

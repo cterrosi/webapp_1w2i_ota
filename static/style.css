@@ -1,0 +1,69 @@
+body {
+  font-family: "Segoe UI", sans-serif;
+  background-color: #f8f9fa;
+  color: #212529;
+  margin: 0;
+  padding: 20px;
+}
+
+.container {
+  max-width: 900px;
+  margin: auto;
+}
+
+h2, h3, h4 {
+  color: #0d6efd;
+  margin-top: 1.5em;
+}
+
+h4 small {
+  color: #6c757d;
+  font-weight: normal;
+}
+
+.card {
+  border: 1px solid #dee2e6;
+  border-radius: 6px;
+  padding: 15px;
+  margin-top: 20px;
+  background-color: #ffffff;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 10px;
+}
+
+th, td {
+  border: 1px solid #dee2e6;
+  padding: 8px;
+  text-align: left;
+}
+
+th {
+  background-color: #e9ecef;
+}
+
+a {
+  display: inline-block;
+  margin-top: 20px;
+  color: #0d6efd;
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+em {
+  color: #6c757d;
+}
+
+/* Bottoni compatti, stessi valori di .btn-sm ma forzati */
+.btn-compact {
+    --bs-btn-padding-y: .25rem;
+    --bs-btn-padding-x: .6rem;
+    --bs-btn-font-size: .875rem;
+    line-height: 1.2;
+}

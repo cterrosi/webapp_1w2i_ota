@@ -1,0 +1,493 @@
+{% extends "base.html" %}
+{% block title %}Booking{% endblock %}
+
+{% block content %}
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
+<script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+
+<div class="container py-3">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h3 class="mb-0">Booking</h3>
+        <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('home.home') }}">Home</a>
+    </div>
+
+    <form id="bookingForm" method="get" action="{{ url_for('availability.search') }}" novalidate>
+        <div class="row g-3">
+
+            <!-- DEPARTURE AIRPORT -->
+            <div class="col-12 col-md-6">
+                <label class="form-label color-1" for="aptfrom">Departure airport</label>
+                <select id="aptfrom" name="aptfrom" class="form-control form-select" title="Departure airport" data-live-search="true">
+                    {% for val,label in airports %}
+                    <option value="{{ val }}">{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <!-- DESTINATION -->
+            <div class="col-12 col-md-6">
+                <label class="form-label color-1" for="destina">Destination</label>
+                <select id="destina" name="destina" class="form-control form-select" title="Destination" required>
+                    <option value="" selected disabled>Select destination</option>
+                    {% for val,label in destinations %}
+                    <option value="{{ val }}">{{ label }}</option>
+                    {% endfor %}
+                </select>
+                <div class="form-text">Select a destination to see available departures.</div>
+            </div>
+
+            <!-- DATES + NIGHTS -->
+            <div class="col-12">
+                <div id="departuresCalendar" class="mb-2"></div>
+
+                <div class="row g-3">
+                    <div class="col-12 col-md-4">
+                        <label class="form-label">Departure date</label>
+                        <input type="date" id="start_date" name="start_date" class="form-control" readonly required>
+                    </div>
+                    <div class="col-12 col-md-4">
+                        <label class="form-label">Return date</label>
+                        <input type="date" id="end_date" name="end_date" class="form-control" readonly>
+                    </div>
+                    <div class="col-6 col-md-2">
+                        <label class="form-label">Nights</label>
+                        <select id="nights" name="nights" class="form-control form-select">
+                            <option value="7" selected>7</option>
+                            <option value="14">14</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-text">Highlighted dates are available departures for the selected destination.</div>
+            </div>
+
+            <!-- ROOMS & GUESTS -->
+            <div class="col-12 col-lg-6">
+                <label class="form-label color-1 d-block">Rooms & Guests</label>
+
+                <!-- Riepilogo + pulsante sulla stessa riga -->
+                <div class="d-flex align-items-center mb-2">
+                    <div class="d-flex align-items-center gap-3 flex-wrap flex-grow-1">
+                        <span><strong>Rooms:</strong> <span id="roomCount">1</span></span>
+                        <span><strong>Adults:</strong> <span id="adultCount">2</span></span>
+                        <span><strong>Children:</strong> <span id="childCount">0</span></span>
+                    </div>
+
+                    <!-- Trigger compatto, allineato a destra -->
+                    <button type="button"
+                            class="btn btn-outline-primary btn-sm ms-3"
+                            id="paxBtn"
+                            data-bs-toggle="modal"
+                            data-bs-target="#paxModal"
+                            aria-label="Edit rooms and guests">
+                        Change Occupation
+                    </button>
+                </div>
+
+                <!-- Hidden fields -->
+                <input type="hidden" name="rooms" id="rooms" value="1">
+                <input type="hidden" name="adults" id="adults" value="2">
+                <input type="hidden" name="children_ages" id="children_ages" value="">
+            </div>
+
+            <!-- SUBMIT (tutto a destra) -->
+            <div class="col-12 mt-2">
+                <div class="d-flex justify-content-end gap-2">
+                    <button class="btn btn-outline-secondary" type="reset" id="resetBtn">Reset</button>
+                    <button class="btn btn-primary" type="submit">Search availability</button>
+                </div>
+            </div>
+
+
+        </div><!-- row -->
+    </form>
+</div>
+
+<!-- Shared spinner overlay -->
+<div id="globalSpinner" class="position-fixed top-0 start-0 w-100 h-100 d-none"
+     style="background: rgba(255,255,255,.6); z-index: 2000;">
+    <div class="position-absolute top-50 start-50 translate-middle text-center">
+        <div class="spinner-border" role="status" aria-label="Loading..."></div>
+        <div class="mt-2 small text-muted">Searching…</div>
+    </div>
+</div>
+
+<!-- PAX Modal -->
+<div class="modal fade" id="paxModal" tabindex="-1" aria-labelledby="paxModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="paxModalLabel">Select rooms and guests</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div class="row gy-3">
+                    <div class="col-12 col-lg-2">
+                        <label class="form-label d-block">Rooms</label>
+                        <select class="form-select" id="roomsSel">
+                            <option>1</option>
+                            <option>2</option>
+                            <option>3</option>
+                        </select>
+                    </div>
+                    <div class="col-12 col-lg-10" id="roomsContainer"><!-- filled by JS --></div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <div class="text-muted me-auto small" id="paxError" style="display:none;"></div>
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" id="applyPax">Apply</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+
+<style>
+    #departuresCalendar td.selectable {
+        cursor: pointer;
+    }
+
+    #departuresCalendar td.selected {
+        outline: 2px solid rgba(0,0,0,.25);
+        border-radius: .5rem;
+    }
+
+    #departuresCalendar td.fallback {
+        background-color: rgba(13,110,253,.10);
+    }
+
+        #departuresCalendar td.fallback:hover {
+            background-color: rgba(13,110,253,.18);
+        }
+</style>
+
+<script>
+    (() => {
+        console.log('[booking] scripts block LOADED');
+
+        const $ = s => document.querySelector(s);
+        const startInput = $('#start_date');
+        const endInput = $('#end_date');
+        const selDest = $('#destina');
+        const selApt = $('#aptfrom');
+        const selNights = $('#nights');
+        const spinner = $('#globalSpinner');
+
+        function showSpinner(on) {
+            if (!spinner) return;
+            spinner.classList.toggle('d-none', !on);
+        }
+
+        function addDays(isoDate, days) {
+            const d = new Date(isoDate);
+            d.setDate(d.getDate() + (parseInt(days, 10) || 0));
+            return d.toISOString().slice(0, 10);
+        }
+
+        const deps = new Set();
+        const durMap = new Map();
+
+        let fp = null;
+        function initFlatpickr() {
+            if (fp) { fp.destroy(); fp = null; }
+            const enabledDates = Array.from(deps).sort();
+            fp = flatpickr(startInput, {
+                dateFormat: "Y-m-d",
+                disableMobile: true,
+                allowInput: true,
+                enable: enabledDates,
+                showMonths: 2,
+                inline: false,
+                onOpen: () => startInput.blur(),
+                onChange: (_, dateStr) => {
+                    const n = selNights?.value || "7";
+                    endInput.value = dateStr ? addDays(dateStr, n) : "";
+                },
+                onDayCreate: (_, __, ___, dayElem) => {
+                    const d = dayElem.dateObj;
+                    const iso = new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+                    if (deps.has(iso)) {
+                        dayElem.classList.add("available-day");
+                        if (durMap.has(iso)) dayElem.title = `Available (${durMap.get(iso)} nights)`;
+                    }
+                }
+            });
+        }
+
+        async function loadDepartures() {
+            deps.clear();
+            durMap.clear();
+            startInput.value = '';
+            endInput.value = '';
+
+            const dest = selDest?.value;
+            if (!dest) { initFlatpickr(); return; }
+
+            const qs = new URLSearchParams({ dest });
+            const apt = selApt?.value;
+            if (apt) qs.set('aptfrom', apt);
+
+            const url = `/availability/departures/by-dest?${qs.toString()}`;
+            console.log('[booking] fetch', url);
+
+            try {
+                const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                const json = await res.json();
+                const rows = Array.isArray(json.rows) ? json.rows : [];
+                rows.forEach(it => {
+                    if (it.date) {
+                        deps.add(it.date);
+                        const dur = parseInt(it.duration_days, 10);
+                        if (!Number.isNaN(dur) && dur > 0) durMap.set(it.date, dur);
+                    }
+                });
+                initFlatpickr();
+            } catch (e) {
+                console.error('[booking] departures exception', e);
+                initFlatpickr();
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            initFlatpickr();
+
+            selDest?.addEventListener('change', loadDepartures);
+            selApt?.addEventListener('change', () => { if (selDest?.value) loadDepartures(); });
+            selNights?.addEventListener('change', () => {
+                const s = startInput.value;
+                if (s) endInput.value = addDays(s, selNights.value || "7");
+            });
+
+            if (selDest?.value) loadDepartures();
+
+            const form = $('#bookingForm');
+            form?.addEventListener('submit', (ev) => {
+                if (!selDest?.value || !startInput?.value) {
+                    ev.preventDefault();
+                    alert('Please select a destination and a departure date.');
+                    return;
+                }
+                showSpinner(true); // shared spinner on search
+            });
+
+            // hide spinner if user navigates back here from results
+            //window.addEventListener('pageshow', () => showSpinner(false));
+
+            // DOPO (patch bfcache):
+            window.addEventListener('pageshow', (ev) => {
+                showSpinner(false);
+
+                // vero quando la pagina ritorna dalla history (back/forward)
+                const nav = performance.getEntriesByType?.('navigation')?.[0];
+                const fromBFCache = ev.persisted || (nav && nav.type === 'back_forward');
+
+                if (fromBFCache) {
+                    // ricrea il calendario e ricarica le date disponibili
+                    initFlatpickr();
+                    if (selDest?.value) {
+                        loadDepartures();
+                    }
+                    // riallinea la data di rientro con le notti selezionate
+                    if (startInput?.value && selNights?.value) {
+                        endInput.value = addDays(startInput.value, selNights.value);
+                    }
+                }
+            });
+        });
+    })();
+</script>
+
+<script>
+    (() => {
+        // ====== PAX modal ======
+        const $ = (s, r = document) => r.querySelector(s);
+        const paxModalEl = $('#paxModal');
+        const roomsSel = $('#roomsSel');
+        const roomsCont = $('#roomsContainer');
+        const applyBtn = $('#applyPax');
+        const errBox = $('#paxError');
+
+        const roomsInput = $('#rooms');
+        const adultsInput = $('#adults');
+        const kidsAgesInput = $('#children_ages');
+
+        const roomCountLbl = $('#roomCount');
+        const adultCountLbl = $('#adultCount');
+        const childCountLbl = $('#childCount');
+
+        if (!paxModalEl || !roomsSel || !roomsCont || !applyBtn) return;
+
+        function updateChildAges(roomEl, n, preset = []) {
+            const cont = roomEl.querySelector('.child-ages');
+            cont.innerHTML = '';
+            if (!n) return;
+            for (let i = 0; i < n; i++) {
+                const sel = document.createElement('select');
+                sel.className = 'form-select form-select-sm child-age';
+                sel.style.minWidth = '70px';
+                sel.setAttribute('aria-label', `Child ${i + 1} age`);
+                sel.innerHTML = Array.from({ length: 18 }, (_, age) => `<option value="${age}">${age}</option>`).join('');
+                sel.value = (preset[i] ?? 6).toString();
+                cont.appendChild(sel);
+            }
+        }
+
+        function buildRoomBlock(idx, adults = 2, children = 0, ages = []) {
+            const wrap = document.createElement('div');
+            wrap.className = 'room-block border rounded p-2 mb-2';
+            wrap.dataset.room = String(idx);
+            wrap.innerHTML = `
+      <div class="row g-2 align-items-end">
+        <div class="col-12 col-md-4">
+          <label class="form-label mb-1">Adults</label>
+          <select class="form-select adult-sel" aria-label="Adults room ${idx + 1}">
+            ${Array.from({ length: 6 }, (_, i) => `<option value="${i + 1}" ${i + 1 === adults ? 'selected' : ''}>${i + 1}</option>`).join('')}
+          </select>
+        </div>
+        <div class="col-12 col-md-4">
+          <label class="form-label mb-1">Children</label>
+          <select class="form-select child-sel" aria-label="Children room ${idx + 1}">
+            ${Array.from({ length: 5 }, (_, i) => `<option value="${i}" ${i === children ? 'selected' : ''}>${i}</option>`).join('')}
+          </select>
+        </div>
+        <div class="col-12 col-md-4">
+          <label class="form-label mb-1">Children ages</label>
+          <div class="child-ages d-flex flex-wrap gap-1"></div>
+        </div>
+      </div>`;
+            updateChildAges(wrap, children, ages);
+            wrap.querySelector('.child-sel').addEventListener('change', (e) => {
+                const n = parseInt(e.target.value, 10) || 0;
+                updateChildAges(wrap, n);
+            });
+            return wrap;
+        }
+
+        function rebuildRooms(n) {
+            roomsCont.innerHTML = '';
+            for (let i = 0; i < n; i++) {
+                roomsCont.appendChild(buildRoomBlock(i, 2, 0, []));
+            }
+        }
+
+        function collectAndApply() {
+            const blocks = Array.from(document.querySelectorAll('#roomsContainer .room-block'));
+            const totals = { rooms: blocks.length, adults: 0, children: 0, ages: [] };
+            for (const b of blocks) {
+                const ad = parseInt(b.querySelector('.adult-sel').value, 10) || 0;
+                const ch = parseInt(b.querySelector('.child-sel').value, 10) || 0;
+                const ages = Array.from(b.querySelectorAll('.child-age')).map(x => parseInt(x.value, 10) || 0);
+                if (ages.length !== ch) {
+                    errBox.textContent = 'Please set the age for each child.';
+                    errBox.style.display = 'block';
+                    return false;
+                }
+                totals.adults += ad;
+                totals.children += ch;
+                totals.ages.push(...ages);
+            }
+            errBox.style.display = 'none';
+            roomsInput.value = String(totals.rooms);
+            adultsInput.value = String(totals.adults);
+            kidsAgesInput.value = totals.ages.join(',');
+
+            roomCountLbl.textContent = totals.rooms;
+            adultCountLbl.textContent = totals.adults;
+            childCountLbl.textContent = totals.children;
+            return true;
+        }
+
+        // Apply and close
+        document.getElementById('applyPax').addEventListener('click', (e) => {
+            e.preventDefault();
+            if (!collectAndApply()) return;
+            const trigger = document.getElementById('paxBtn');
+            if (trigger) trigger.focus({ preventScroll: true });
+            const modalEl = document.getElementById('paxModal');
+            const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
+            requestAnimationFrame(() => modal.hide());
+        });
+
+        paxModalEl.addEventListener('show.bs.modal', () => {
+            const r = Math.min(Math.max(parseInt(roomsInput.value, 10) || 1, 1), 3);
+            roomsSel.value = String(r);
+            rebuildRooms(r);
+            const savedAges = (kidsAgesInput.value || '')
+                .split(',').filter(Boolean).map(x => parseInt(x, 10))
+                .filter(x => !Number.isNaN(x));
+            if (savedAges.length) {
+                const first = roomsCont.querySelector('.room-block');
+                if (first) {
+                    first.querySelector('.child-sel').value = String(savedAges.length);
+                    updateChildAges(first, savedAges.length, savedAges);
+                }
+            }
+        });
+
+        roomsSel.addEventListener('change', () => {
+            rebuildRooms(parseInt(roomsSel.value, 10) || 1);
+        });
+    })();
+</script>
+
+<style>
+    .flatpickr-calendar {
+        font-size: 12px;
+    }
+
+    .flatpickr-weekdays .flatpickr-weekday {
+        font-size: 11px;
+    }
+
+    .flatpickr-current-month .flatpickr-monthDropdown-months,
+    .flatpickr-current-month .numInput.cur-year {
+        font-size: 13px;
+    }
+
+    .flatpickr-days .dayContainer {
+        justify-content: flex-start !important;
+    }
+
+    .flatpickr-day {
+        width: calc(100%/7) !important;
+        height: 26px;
+        line-height: 26px;
+        margin: 0 !important;
+        position: relative;
+        overflow: hidden;
+        z-index: 1;
+    }
+
+        .flatpickr-day.available-day {
+            background: transparent !important;
+            border: none !important;
+            color: #0a3622 !important;
+        }
+
+            .flatpickr-day.available-day::before {
+                content: "";
+                position: absolute;
+                inset: 2px;
+                border: 1px solid #198754;
+                background: rgba(25,135,84,.30);
+                border-radius: 6px;
+                z-index: 0;
+                pointer-events: none;
+            }
+
+        .flatpickr-day.selected, .flatpickr-day.startRange, .flatpickr-day.endRange {
+            background: #0d6efd !important;
+            border-color: #0d6efd !important;
+            color: #fff !important;
+        }
+
+            .flatpickr-day.selected.available-day::before,
+            .flatpickr-day.startRange.available-day::before,
+            .flatpickr-day.endRange.available-day::before {
+                display: none !important;
+            }
+</style>
+{% endblock %}

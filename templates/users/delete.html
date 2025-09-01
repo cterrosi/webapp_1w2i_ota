@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Elimina utente{% endblock %}
+{% block content %}
+<h3 class="mb-3">Elimina utente</h3>
+
+<div class="alert alert-warning">
+    Confermi l'eliminazione di <strong>{{ user.username }}</strong> (ID: {{ user.id }})?
+    {% if total <= 1 %}
+    <div class="mt-2"><strong>Attenzione:</strong> è l'unico utente, non puoi eliminarlo.</div>
+    {% endif %}
+</div>
+
+<form method="post" data-spinner="Deleting user...">
+    <div class="d-flex gap-2">
+        <button class="btn btn-danger" type="submit" {% if total <= 1 %}disabled{% endif %}>Elimina</button>
+        <a class="btn btn-outline-secondary" href="{{ url_for('users.list') }}" data-spinner="Back to users...">Annulla</a>
+    </div>
+</form>
+{% endblock %}

@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <title>{% block title %}1way2italy Rest OTA Web Importer{% endblock %}</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+</head>
+<body>
+    <div class="container-fluid my-3 px-4 page-wrap">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <strong>1way2italy Rest OTA Web Importer</strong>
+
+            {% if current_user.is_authenticated %}
+            <div class="d-flex align-items-center gap-2">
+
+                <!-- Booking -->
+                <a href="{{ url_for('booking.booking_form') }}"
+                   class="btn btn-outline-secondary btn-sm"
+                   data-spinner="Opening booking...">Booking</a>
+
+                <a href="{{ url_for('price_export.form') }}"
+                   class="btn btn-outline-secondary btn-sm"
+                   data-spinner="Opening prices export...">Prices Export</a>
+
+                <!-- Prodotti -->
+                <a href="{{ url_for('products.ota_products') }}"
+                   class="btn btn-outline-secondary btn-sm"
+                   data-spinner="Opening products...">Products</a>
+
+                <!-- Settings -->
+                <a href="{{ url_for('home.settings') }}"
+                   class="btn btn-outline-secondary btn-sm"
+                   data-spinner="Opening Settings…">
+                    &#9881; Settings
+                </a>
+
+                <!-- Users -->
+                <a href="{{ url_for('users.list') }}"
+                   class="btn btn-outline-secondary btn-sm"
+                   data-spinner="Opening users...">
+                    Users
+                </a>
+
+                <!-- Auth.logout -->
+                <a href="{{ url_for('auth.logout') }}"
+                   class="btn btn-outline-danger btn-sm"
+                   data-spinner="Logging Out...">
+                    Logout
+                </a>
+            </div>
+            {% endif %}
+        </div>
+
+        {% block content %}{% endblock %}
+    </div>
+
+    <!-- Bootstrap JS (per la modal della gallery) -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+
+    <!-- Spinner globale riutilizzabile -->
+    <div id="appSpinner" class="spinner-overlay d-none">
+        <div class="text-center">
+            <div class="spinner-border" role="status" aria-label="Loading"></div>
+            <div id="spinnerText" class="mt-2 text-white small">Caricamento...</div>
+        </div>
+    </div>
+
+    <style>
+        .spinner-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,.35);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 2000;
+        }
+
+            .spinner-overlay .spinner-border {
+                width: 3rem;
+                height: 3rem;
+            }
+    </style>
+
+    <script>
+        (function () {
+            const ov = document.getElementById('appSpinner');
+            const txt = document.getElementById('spinnerText');
+
+            function showSpinner(message) {
+                if (!ov) return;
+                if (txt && message) txt.textContent = message;
+                ov.classList.remove('d-none');
+            }
+            function hideSpinner() {
+                if (!ov) return;
+                ov.classList.add('d-none');
+            }
+
+            // 🔒 Nascondi sempre lo spinner quando la pagina torna visibile o dal bfcache
+            window.addEventListener('pageshow', function () { hideSpinner(); });
+            document.addEventListener('visibilitychange', function () {
+                if (document.visibilityState === 'visible') hideSpinner();
+            });
+            // (opzionale, utile per SPA/history)
+            window.addEventListener('popstate', hideSpinner);
+
+            // Unico delegato per tutti i link con data-spinner
+            document.addEventListener('click', function (e) {
+                const a = e.target.closest('a[data-spinner]');
+                if (!a) return;
+
+                // Niente spinner per: nuove tab, download, anchor locali, modificatori tastiera
+                if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || a.target === '_blank' || a.hasAttribute('download')) return;
+                const href = a.getAttribute('href') || '';
+                if (href.startsWith('#')) return;
+
+                // (facoltativo) mostra spinner solo per stessa origin
+                try {
+                    const u = new URL(href, location.href);
+                    if (u.origin !== location.origin) return;
+                } catch (_) { /* href relativo: ok */ }
+
+                showSpinner(a.dataset.spinner || 'Caricamento...');
+            }, { capture: true });
+
+            // Unico delegato per tutti i form con data-spinner
+            document.addEventListener('submit', function (e) {
+                const f = e.target && e.target.closest('form[data-spinner]');
+                if (!f) return;
+                showSpinner(f.dataset.spinner || 'Caricamento...');
+                // ⚠️ NON disabilitare gli input qui, altrimenti non vengono inviati nel POST
+            }, true);
+
+            // All’avvio, assicurati che lo spinner sia nascosto
+            hideSpinner();
+        })();
+    </script>
+
+    {% block scripts %}{% endblock %}
+</body>
+</html>

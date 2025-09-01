@@ -1,0 +1,259 @@
+﻿{% extends "base.html" %}
+{% block title %}Listino partenze{% endblock %}
+
+{% block content %}
+<div class="container-xxl py-3">
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h3 class="mb-0">Listino partenze</h3>
+    <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('home.home') }}">Home</a>
+  </div>
+
+  <form class="card p-3" method="post" action="{{ url_for('price_export.run_export') }}" id="priceExportForm" novalidate>
+  <input type="hidden" name="mode" id="mode" value="preview">
+
+  {# RIGA 1: campi principali, allineati in alto e help-text uniformi #}
+  <div class="row g-3 align-items-start">
+    <div class="col-12 col-md-6">
+      <label class="form-label mb-1">Hotel (cerca per nome)</label>
+      <input type="text" class="form-control" name="hotel_name" id="hotel_name"
+             placeholder="Es. Aurora Bay Resort" required autocomplete="off">
+      <input type="hidden" name="hotel_code" id="hotel_code">
+      <div class="form-text">Digita almeno 2 caratteri</div>
+    </div>
+
+    <div class="col-6 col-md-3">
+      <label class="form-label mb-1">Da data</label>
+      <input type="date" class="form-control" name="date_from">
+      <div class="form-text">&nbsp;</div>
+    </div>
+
+    <div class="col-6 col-md-3">
+      <label class="form-label mb-1">A data</label>
+      <input type="date" class="form-control" name="date_to">
+      <div class="form-text">&nbsp;</div>
+    </div>
+  </div>
+
+  {# RIGA 2: formato + bottoni, allineati in basso #}
+  <div class="row g-3 align-items-end mt-1">
+    <div class="col-12 col-md-3">
+      <label class="form-label mb-1">Formato</label>
+      <select class="form-select" name="fmt">
+        <option value="csv">CSV (Google Sheets)</option>
+        <option value="xlsx">Excel (XLSX)</option>
+      </select>
+    </div>
+
+    <div class="col-12 col-md-6 d-flex gap-2">
+      <button class="btn btn-outline-primary flex-fill" type="submit"
+              onclick="document.getElementById('mode').value='preview'">
+        Anteprima
+      </button>
+
+      <button class="btn btn-primary flex-fill" type="submit" id="btnDownload"
+              onclick="document.getElementById('mode').value='download'">
+        <span class="label">Scarica</span>
+        <span class="spinner-border spinner-border-sm align-text-bottom d-none" role="status" aria-hidden="true"></span>
+      </button>
+    </div>
+
+    {# opzionale: colonna di riempimento per arrivare a 12 su md+ #}
+    <div class="d-none d-md-block col-md-3"></div>
+  </div>
+</form>
+
+
+  <div class="mt-3 small text-muted">
+    Preset occupazioni: 1 adulto · 2 adulti · 3 adulti · 2 adulti e 1 bambino (2-11). <br>
+    (Modificabili nel file <code>price_export.py</code>, variabile <code>OCCUPANCY_PRESETS</code>.)
+  </div>
+</div>
+
+<style>
+  /* overlay spinner */
+  #pxSpinner {
+    position: fixed; inset: 0;
+    background: rgba(255,255,255,.6);
+    backdrop-filter: blur(2px);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 2000;
+  }
+  #pxSpinner[hidden] { display: none !important; }
+
+  /* assicura stessa altezza per tutte le help-text */
+  .form-text { min-height: 1.25rem; }
+
+  .form-text { min-height: 1.25rem; } /* ~20px */
+</style>
+
+<div id="pxSpinner" hidden>
+  <div class="text-center">
+    <div class="spinner-border" role="status" aria-label="Caricamento..."></div>
+    <div class="mt-2 fw-semibold">Elaboro…</div>
+  </div>
+</div>
+
+<!-- IFRAME nascosto per i download -->
+<iframe name="dlFrame" id="dlFrame" class="d-none" hidden></iframe>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+  const form    = document.getElementById('priceExportForm');
+  const input   = document.getElementById('hotel_name');
+  const hidden  = document.getElementById('hotel_code');
+  const modeEl  = document.getElementById('mode');
+  const overlay = document.getElementById('pxSpinner');
+  const btnDl   = document.getElementById('btnDownload');
+  const dlSpin  = btnDl?.querySelector('.spinner-border');
+  const dlLabel = btnDl?.querySelector('.label');
+
+  if (!form) return;
+
+  // -------- Autocomplete (come prima) --------
+  let timer = null, lastQ = "", lastList = [];
+  function dedupeByName(arr){ const seen=new Set(), out=[]; for(const it of (arr||[])){ const k=String(it.name||'').toLowerCase(); if(k && !seen.has(k)){ seen.add(k); out.push(it); }} return out; }
+  function normalize(s){ return String(s||'').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').trim().toLowerCase(); }
+  function tryExtractCode(txt){ const up=String(txt||'').toUpperCase(); const m=up.match(/\(([A-Z0-9]{10,})\)/) || up.match(/\b([A-Z0-9]{10,})\b/); return m?m[1]:""; }
+
+  input?.addEventListener('input', () => {
+    if (hidden) hidden.value = "";
+    const q = (input.value || "").trim();
+    let dl  = document.getElementById('hotels_datalist');
+    if (q.length < 2) { if (dl) dl.innerHTML=''; return; }
+    clearTimeout(timer);
+    timer = setTimeout(async () => {
+      if (q === lastQ) return; lastQ = q;
+      try {
+        const res = await fetch(`{{ url_for('price_export.suggest') }}?q=` + encodeURIComponent(q));
+        if (!res.ok) return;
+        let data = await res.json();
+        data = dedupeByName(data); lastList = data;
+        if (!dl) { dl = document.createElement('datalist'); dl.id = 'hotels_datalist'; document.body.appendChild(dl); input.setAttribute('list','hotels_datalist'); }
+        dl.innerHTML = (data||[]).map(i => `<option value="${(i.name||'').replace(/"/g,'&quot;')}"></option>`).join('');
+      } catch(e){ console.error('suggest error', e); }
+    }, 250);
+  });
+
+  function syncHidden(){
+    if (!hidden) return;
+    const raw = input.value || ""; const name = normalize(raw);
+    const typed = tryExtractCode(raw);
+    if (typed) { hidden.value = typed; return; }
+    if (!name || !Array.isArray(lastList) || !lastList.length) { hidden.value = ""; return; }
+    let picked = lastList.find(i => normalize(i.name) === name);
+    if (!picked) { const starts = lastList.filter(i => normalize(i.name).startsWith(name)); if (starts.length === 1) picked = starts[0]; }
+    if (!picked) { const incl = lastList.filter(i => normalize(i.name).includes(name)); if (incl.length === 1) picked = incl[0]; }
+    if (!picked && lastList.length === 1) picked = lastList[0];
+    hidden.value = picked ? (picked.code_base || "") : "";
+  }
+  input?.addEventListener('change',  syncHidden);
+  input?.addEventListener('blur',    syncHidden);
+  input?.addEventListener('keydown', (e)=>{ if (e.key === 'Enter') syncHidden(); });
+
+  // -------- Date linkage --------
+  const from = document.querySelector('input[name="date_from"]');
+  const to   = document.querySelector('input[name="date_to"]');
+  function syncToMin(){
+    if (!from || !to) return;
+    if (from.value) {
+      to.min = from.value;
+      if (!to.value || to.value < from.value) to.value = from.value;
+      if (to._flatpickr) { to._flatpickr.set('minDate', from.value); to._flatpickr.jumpToDate(new Date(from.value)); }
+    } else {
+      to.removeAttribute('min'); if (to._flatpickr) to._flatpickr.set('minDate', null);
+    }
+  }
+  from?.addEventListener('change', syncToMin);
+  from?.addEventListener('input',  syncToMin);
+  syncToMin();
+
+  // -------- Overlay (solo per Anteprima) --------
+  function setButtonsDisabled(v){ form.querySelectorAll('button').forEach(b => b.disabled = v); }
+  function showOverlay(){ overlay && (overlay.hidden = false); document.body.style.cursor = 'progress'; }
+  function hideOverlay(){ overlay && (overlay.hidden = true);  document.body.style.cursor = 'default'; }
+
+  // -------- Spinner inline sul bottone Scarica --------
+  function showBtnSpinner(){ if (!btnDl) return; dlLabel?.classList.add('d-none'); dlSpin?.classList.remove('d-none'); btnDl.disabled = true; }
+  function hideBtnSpinner(){ if (!btnDl) return; dlSpin?.classList.add('d-none'); dlLabel?.classList.remove('d-none'); btnDl.disabled = false; }
+
+  // -------- Helpers download via fetch --------
+  function getFilenameFromDisposition(h){
+    if (!h) return null;
+    let m = /filename\*=UTF-8''([^;]+)/i.exec(h);
+    if (m) return decodeURIComponent(m[1]);
+    m = /filename="?([^"]+)"?/i.exec(h);
+    return m ? m[1] : null;
+  }
+  function extFromFmt(){
+    const sel = form.querySelector('select[name="fmt"]');
+    const v = sel ? (sel.value || 'csv') : 'csv';
+    return v === 'xlsx' ? 'xlsx' : 'csv';
+  }
+
+  // -------- Submit --------
+  form.addEventListener('submit', async (e) => {
+    syncHidden();
+    if (!hidden.value) {
+      e.preventDefault();
+      alert('Seleziona un hotel dall’elenco o inserisci il codice (es. 0000RMFSUNRISE).');
+      input?.focus();
+      return;
+    }
+
+    const isDownload = (modeEl && modeEl.value === 'download');
+
+    if (!isDownload) {
+      // ANTEPRIMA: invio normale + overlay
+      setButtonsDisabled(true);
+      showOverlay();
+      return; // NON prevenire
+    }
+
+    // DOWNLOAD: gestito via fetch (niente overlay blocca-pagina)
+    e.preventDefault();
+    showBtnSpinner();
+
+    try {
+      const fd = new FormData(form);
+      // assicura mode=download (in caso di invio da Enter)
+      fd.set('mode', 'download');
+
+      const res = await fetch(form.action, {
+        method: 'POST',
+        body: fd,
+        credentials: 'same-origin',
+        cache: 'no-store',
+      });
+
+      if (!res.ok) {
+        const msg = await res.text().catch(()=> 'Errore durante il download.');
+        alert(msg || `Errore ${res.status}`);
+        hideBtnSpinner();
+        return;
+        }
+
+      const blob = await res.blob();
+      // ricava filename dai header (se presente)
+      const dispo = res.headers.get('Content-Disposition');
+      let filename = getFilenameFromDisposition(dispo) || `listino.${extFromFmt()}`;
+
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+
+    } catch (err) {
+      console.error('download error', err);
+      alert('Errore di rete durante il download.');
+    } finally {
+      hideBtnSpinner();
+    }
+  });
+});
+</script>
+
+{% endblock %}

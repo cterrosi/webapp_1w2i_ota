@@ -1,0 +1,67 @@
+# =======================
+# Visual Studio
+# =======================
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Build
+[Bb]in/
+[Oo]bj/
+Debug/
+Release/
+x64/
+x86/
+*.log
+
+# =======================
+# Python
+# =======================
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.db
+instance/
+.env
+
+# Virtualenv
+.venv/
+venv/
+env/
+
+# =======================
+# SQLite (usa schema.sql)
+# =======================
+*.sqlite3
+*.db
+
+# =======================
+# Docker
+# =======================
+/data/
+*.pid
+*.sock
+
+# =======================
+# IDE (VSCode, JetBrains, ecc.)
+# =======================
+.vscode/
+.idea/
+
+# =======================
+# Sistema
+# =======================
+.DS_Store
+Thumbs.db
+
+# artefatti/bundle
+*.tar
+*.zip
+dist/
+build/
+# db locali
+*.db
+data/

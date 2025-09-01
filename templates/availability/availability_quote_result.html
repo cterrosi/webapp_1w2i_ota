@@ -1,0 +1,190 @@
+{% extends "base.html" %}
+{% block title %}Risultato quotazione{% endblock %}
+{% block content %}
+<h3 class="mb-3">Risultato quotazione</h3>
+
+<a class="btn btn-primary mt-3"
+   href="{{ url_for('products.ota_product_detail', product_id=product_id|int) }}">
+    Back to Product
+</a>
+
+{% if result.success %}
+<div class="alert alert-success">
+    <div><strong>Totale:</strong> {{ result.total }} {{ result.currency }}</div>
+    <div><strong>Booking code:</strong> {{ result.booking_code }}</div>
+</div>
+
+<!-- Prodotto -->
+<h5>Struttura</h5>
+<table class="table table-sm table-bordered">
+    <tbody>
+        <tr><th>Nome</th><td>{{ result.product.name }}</td></tr>
+        <tr><th>Codice</th><td>{{ result.product.code }}</td></tr>
+        <tr><th>Città</th><td>{{ result.product.address.city }} ({{ result.product.city_code }})</td></tr>
+        <tr><th>Tipologia</th><td>{{ result.product.type_name or result.product.type }}</td></tr>
+        <tr><th>Categoria</th><td>{{ result.product.category_code }} – {{ result.product.category_detail }}</td></tr>
+        <tr><th>Periodo</th><td>{{ result.timespan.start }} → {{ result.timespan.end }}</td></tr>
+    </tbody>
+</table>
+
+<!-- Camera & piano -->
+<h5>Camera & Piano tariffario</h5>
+<table class="table table-sm table-bordered">
+    <tbody>
+        <tr><th>Camera</th><td>{{ result.room.name }} ({{ result.room.code }})</td></tr>
+        <tr><th>Rate plan</th><td>{{ result.rateplan.name }} ({{ result.rateplan.code }})</td></tr>
+        <tr><th>Pasti</th><td>{{ result.rateplan.meals or '—' }}</td></tr>
+        <tr><th>Totale</th><td><strong>{{ result.total }} {{ result.currency }}</strong></td></tr>
+    </tbody>
+</table>
+
+<!-- Voli -->
+  {% if result.flights and result.flights|length %}
+<h5>Voli</h5>
+<div class="table-responsive">
+    <table class="table table-sm table-striped table-bordered align-middle">
+        <thead class="table-light">
+            <tr>
+                <th>Partenza</th>
+                <th>Arrivo</th>
+                <th>Volo</th>
+                <th>Classe</th>
+                <th>Compagnia</th>
+                <th>Bagaglio</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for f in result.flights %}
+            <tr>
+                <td>{{ f.dep.code }} {{ f.dep.name }}<br><small>{{ f.dep_datetime }}</small></td>
+                <td>{{ f.arr.code }} {{ f.arr.name }}<br><small>{{ f.arr_datetime }}</small></td>
+                <td>{{ f.flight_number }}</td>
+                <td>{{ f.class }}</td>
+                <td>{{ f.oper.name or f.mkt.name }} ({{ f.oper.code or f.mkt.code }})</td>
+                <td>{{ f.baggage_kg or '—' }} kg</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+  {% endif %}
+
+<!-- Itinerario -->
+  {% if result.itinerary and result.itinerary|length %}
+<h5>Itinerario</h5>
+<ol class="mb-3">
+    {% for d in result.itinerary %}
+    <li><strong>{{ d.label }}</strong> – {{ d.text or d.dest.name }}</li>
+    {% endfor %}
+</ol>
+  {% endif %}
+
+<!-- Nota/descrizione -->
+  {% if result.note %}
+<h5>Descrizione / Note</h5>
+<div class="mb-3" style="white-space:pre-wrap">{{ result.note }}</div>
+  {% endif %}
+
+<!-- Penali -->
+  {% if result.cancel_policy %}
+<h5>Politiche di cancellazione</h5>
+<div class="alert alert-secondary">
+    Non rimborsabile: <strong>{{ 'Sì' if result.cancel_policy.non_ref else 'No' }}</strong><br>
+    Deadline: {{ result.cancel_policy.deadline.multiplier }} {{ result.cancel_policy.deadline.unit }}
+    ({{ result.cancel_policy.deadline.drop_time }})<br>
+    Penale: {{ result.cancel_policy.penalty.percent }}% ({{ result.cancel_policy.penalty.basis }})
+</div>
+  {% endif %}
+
+<!-- Fasce età -->
+  {% if result.age_bands and result.age_bands|length %}
+<h6>Fasce età prezzo</h6>
+<ul>
+    {% for b in result.age_bands %}
+    <li>{{ b.min }}–{{ b.max }} anni</li>
+    {% endfor %}
+</ul>
+  {% endif %}
+
+<!-- Ospiti -->
+  {% if result.guests and result.guests|length %}
+<h6>Ospiti</h6>
+<ul>
+    {% for g in result.guests %}
+    <li>#{{ g.rph }} – {{ g.name }} ({{ g.birth }}) – {{ g.email }}</li>
+    {% endfor %}
+</ul>
+  {% endif %}
+
+<!-- Reservation IDs -->
+  {% if result.res_ids and result.res_ids|length %}
+<h6>Riferimenti</h6>
+<ul>
+    {% for r in result.res_ids %}
+    <li>Type {{ r.type }}: {{ r.value }}</li>
+    {% endfor %}
+</ul>
+  {% endif %}
+
+<!-- Immagini -->
+  {% if result.images and result.images|length %}
+<h5 class="mt-3">Immagini</h5>
+<div class="row row-cols-2 row-cols-md-4 g-3">
+    {% for url in result.images %}
+    <div class="col"><img src="{{ url }}" class="img-fluid rounded border" alt=""></div>
+    {% endfor %}
+</div>
+  {% endif %}
+
+{% else %}
+<div class="alert alert-danger">
+    <strong>Errore nella quotazione</strong>
+    <ul class="mb-0">
+        {% for e in result.errors %}
+        <li>{{ e }}</li>{% endfor %}
+    </ul>
+</div>
+{% endif %}
+
+<hr class="my-4">
+
+<div class="accordion" id="xmlAccordion">
+    <div class="accordion-item">
+        <h2 class="accordion-header" id="headingReq">
+            <button class="accordion-button collapsed" type="button"
+                    data-bs-toggle="collapse" data-bs-target="#collapseReq"
+                    aria-expanded="false" aria-controls="collapseReq">
+                XML Request
+            </button>
+        </h2>
+        <div id="collapseReq" class="accordion-collapse collapse"
+             aria-labelledby="headingReq" data-bs-parent="#xmlAccordion">
+            <div class="accordion-body">
+                <pre class="small bg-light p-2 border rounded" style="white-space: pre-wrap;">{{ request_xml }}</pre>
+            </div>
+        </div>
+    </div>
+
+    <div class="accordion-item">
+        <h2 class="accordion-header" id="headingResp">
+            <button class="accordion-button collapsed" type="button"
+                    data-bs-toggle="collapse" data-bs-target="#collapseResp"
+                    aria-expanded="false" aria-controls="collapseResp">
+                XML Response
+            </button>
+        </h2>
+        <div id="collapseResp" class="accordion-collapse collapse"
+             aria-labelledby="headingResp" data-bs-parent="#xmlAccordion">
+            <div class="accordion-body">
+                <pre class="small bg-light p-2 border rounded" style="white-space: pre-wrap;">{{ response_xml }}</pre>
+            </div>
+        </div>
+    </div>
+</div>
+
+<a class="btn btn-primary mt-3"
+   href="{{ url_for('products.ota_product_detail', product_id=product_id|int) }}">
+    Back to Product
+</a>
+
+{% endblock %}

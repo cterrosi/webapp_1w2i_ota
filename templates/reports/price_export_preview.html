@@ -1,0 +1,136 @@
+﻿{% extends "base.html" %}
+{% block title %}Anteprima listino{% endblock %}
+{% block content %}
+<div class="container-xxl py-3">
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h3 class="mb-0">Anteprima listino – {{ hotel }}</h3>
+  </div>
+
+  {# === TOOLBAR TOP === #}
+  <form class="mb-3" method="post" action="{{ url_for('price_export.run_export') }}" data-dl-form>
+    <input type="hidden" name="hotel_name" value="{{ hotel }}">
+    <input type="hidden" name="hotel_code" value="{{ hotel_code }}">
+    <input type="hidden" name="date_from" value="{{ date_from or '' }}">
+    <input type="hidden" name="date_to" value="{{ date_to or '' }}">
+    <input type="hidden" name="mode" value="download">
+    <input type="hidden" name="dl_token" value="">
+    <textarea name="rows_json" class="d-none">{{ rows|tojson }}</textarea>
+
+    <div class="d-flex align-items-center flex-wrap gap-2">
+      <select class="form-select w-auto" name="fmt" aria-label="Formato file">
+        <option value="csv"  {% if fmt=='csv' %}selected{% endif %}>CSV</option>
+        <option value="xlsx" {% if fmt=='xlsx' %}selected{% endif %}>XLSX</option>
+      </select>
+
+      <button type="submit" class="btn btn-primary">Scarica</button>
+      <button type="button" class="btn btn-outline-secondary" onclick="window.location='{{ url_for('price_export.form') }}'">↩︎ Torna al form</button>
+    </div>
+  </form>
+
+  <div class="card">
+    <div class="table-responsive">
+      <table class="table table-sm mb-0">
+        <thead>
+          <tr>
+            <th>Id Struttura</th>
+            <th>Date partenza e arrivo</th>
+            <th>Aeroporto</th>
+            <th>Numero Adulti e Bambini sotto i 12 anni</th>
+            <th class="text-end">Prezzo di listino</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in rows %}
+          <tr>
+            <td>{{ r["Id Struttura"] }}</td>
+            <td>{{ r["Date partenza e arrivo"] }}</td>
+            <td>{{ r["Aeroporto"] }}</td>
+            <td>{{ r["Numero Adulti e Bambini sotto i 12 anni"] }}</td>
+            <td class="text-end">{{ r["Prezzo di listino"] }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  {% if not rows or rows|length == 0 %}
+    <div class="alert alert-warning mt-3 mb-0">Nessuna partenza trovata per i filtri selezionati.</div>
+  {% endif %}
+
+  {# === TOOLBAR BOTTOM === #}
+  <form class="mt-3" method="post" action="{{ url_for('price_export.run_export') }}" data-dl-form>
+    <input type="hidden" name="hotel_name" value="{{ hotel }}">
+    <input type="hidden" name="hotel_code" value="{{ hotel_code }}">
+    <input type="hidden" name="date_from" value="{{ date_from or '' }}">
+    <input type="hidden" name="date_to" value="{{ date_to or '' }}">
+    <input type="hidden" name="mode" value="download">
+    <input type="hidden" name="dl_token" value="">
+    <textarea name="rows_json" class="d-none">{{ rows|tojson }}</textarea>
+
+    <div class="d-flex align-items-center flex-wrap gap-2">
+      <select class="form-select w-auto" name="fmt" aria-label="Formato file">
+        <option value="csv"  {% if fmt=='csv' %}selected{% endif %}>CSV</option>
+        <option value="xlsx" {% if fmt=='xlsx' %}selected{% endif %}>XLSX</option>
+      </select>
+
+      <button type="submit" class="btn btn-primary">Scarica</button>
+      <button type="button" class="btn btn-outline-secondary" onclick="window.location='{{ url_for('price_export.form') }}'">↩︎ Torna al form</button>
+    </div>
+  </form>
+</div>
+
+<style>
+  #pxSpinner { position: fixed; inset: 0; background: rgba(255,255,255,.6); backdrop-filter: blur(2px);
+               display: flex; align-items: center; justify-content: center; z-index: 2000; }
+  #pxSpinner[hidden] { display: none !important; }
+</style>
+<div id="pxSpinner" hidden>
+  <div class="text-center">
+    <div class="spinner-border" role="status" aria-label="Caricamento..."></div>
+    <div class="mt-2 fw-semibold">Elaboro…</div>
+  </div>
+</div>
+
+<iframe name="dlFrame" id="dlFrame" class="d-none" hidden></iframe>
+
+<script>
+(function(){
+  const overlay = document.getElementById('pxSpinner');
+  function setButtonsDisabled(f, v){ f.querySelectorAll('button').forEach(b => b.disabled = v); }
+  function show(){ overlay && (overlay.hidden = false); document.body.style.cursor = 'progress'; }
+  function hide(){ overlay && (overlay.hidden = true);  document.body.style.cursor = 'default'; }
+
+  let pollTimer = null, pollDeadline = 0;
+  async function poll(token, form){
+    clearInterval(pollTimer);
+    pollDeadline = Date.now() + 120000;
+    pollTimer = setInterval(async () => {
+      try {
+        const r = await fetch(`{{ url_for('price_export.download_ping_v2') }}?token=${encodeURIComponent(token)}`, { credentials: 'same-origin', cache: 'no-store' });
+        if (r.status === 204) {
+          clearInterval(pollTimer);
+          setButtonsDisabled(form, false); hide();
+          form.removeAttribute('target');
+        } else if (Date.now() > pollDeadline) {
+          clearInterval(pollTimer);
+          setButtonsDisabled(form, false); hide();
+          form.removeAttribute('target');
+        }
+      } catch(_e) {}
+    }, 400);
+  }
+
+  document.querySelectorAll('form[data-dl-form]').forEach(form=>{
+    let dlTok = form.querySelector('input[name="dl_token"]');
+    form.addEventListener('submit', ()=>{
+      const token = Date.now().toString(36) + Math.random().toString(16).slice(2);
+      dlTok.value = token;
+      form.setAttribute('target', 'dlFrame');
+      setButtonsDisabled(form, true); show();
+      poll(token, form);
+    });
+  });
+})();
+</script>
+{% endblock %}

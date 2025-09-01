@@ -1,0 +1,398 @@
+﻿{% extends "base.html" %}
+{% block title %}OTA Importer Settings{% endblock %}
+
+{% block content %}
+<div class="row g-4">
+
+    {# FLASH (se base.html non li rende già) #}
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="col-12">
+        {% for category, message in messages %}
+        <div class="alert alert-{{ 'warning' if category == 'message' else category }} alert-dismissible fade show" role="alert">
+            {{ message }}
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    <!-- Colonna sinistra: Impostazioni -->
+    <div class="col-12 col-lg-8">
+        <div class="card shadow-sm">
+            <div class="card-header">OTA Settings</div>
+            <div class="card-body">
+                <form method="post" action="{{ url_for('home.settings') }}" class="row g-3">
+
+                    <div class="col-12">
+                        <label class="form-label">Base URL</label>
+                        <input name="base_url" class="form-control" value="{{ setting.base_url or '' }}">
+                    </div>
+
+                    <div class="col-6 col-md-4">
+                        <label class="form-label">Ambiente</label>
+                        <select name="env" class="form-select">
+                            <option value="TEST" {{ 'selected' if setting.target != 'Production' else '' }}>TEST</option>
+                            <option value="PRODUCTION" {{ 'selected' if setting.target == 'Production' else '' }}>PRODUCTION</option>
+                        </select>
+                    </div>
+
+                    <div class="col-6 col-md-4">
+                        <label class="form-label">PrimaryLangID</label>
+                        <input name="primary_lang" class="form-control" value="{{ setting.primary_lang or 'it' }}">
+                    </div>
+
+                    <div class="col-6 col-md-4">
+                        <label class="form-label">MarketCountryCode</label>
+                        <input name="market_country_code" class="form-control" value="{{ setting.market_country_code or 'it' }}">
+                    </div>
+
+                    <div class="col-6 col-md-4">
+                        <label class="form-label">RequestorID</label>
+                        <input name="requestor_id" class="form-control" value="{{ setting.requestor_id or '' }}">
+                    </div>
+
+                    <div class="col-6 col-md-4">
+                        <label class="form-label">MessagePassword</label>
+                        <input name="message_password" class="form-control" value="{{ setting.message_password or '' }}">
+                    </div>
+
+                    <div class="col-6 col-md-4">
+                        <label class="form-label">ChainCode</label>
+                        <input name="chain_code" class="form-control" value="{{ setting.chain_code or '' }}">
+                    </div>
+
+                    <div class="col-6 col-md-4">
+                        <label class="form-label">ProductType</label>
+                        <input name="product_type" class="form-control" value="{{ setting.product_type or 'Tour' }}">
+                    </div>
+
+                    <div class="col-6 col-md-4">
+                        <label class="form-label">CategoryCode</label>
+                        <input name="category_code" class="form-control" value="{{ setting.category_code or '211' }}">
+                    </div>
+
+                    <div class="col-6 col-md-4">
+                        <label class="form-label">CityCode</label>
+                        <input name="city_code" class="form-control" value="{{ setting.city_code or '' }}">
+                    </div>
+
+                    <div class="col-12 col-md-6">
+                        <label class="form-label">TourActivityCode (opz.)</label>
+                        <input name="tour_activity_code" class="form-control" value="{{ setting.tour_activity_code or '' }}">
+                    </div>
+
+                    <div class="col-12"><hr></div>
+
+                    <div class="col-12 col-md-6">
+                        <label class="form-label">Bearer Token</label>
+                        <input name="bearer_token" class="form-control" value="{{ setting.bearer_token or '' }}">
+                    </div>
+
+                    <div class="col-6 col-md-3">
+                        <label class="form-label">Basic User</label>
+                        <input name="basic_user" class="form-control" value="{{ setting.basic_user or '' }}">
+                    </div>
+
+                    <div class="col-6 col-md-3">
+                        <label class="form-label">Basic Pass</label>
+                        <input name="basic_pass" class="form-control" value="{{ setting.basic_pass or '' }}">
+                    </div>
+
+                    <div class="col-6 col-md-3">
+                        <label class="form-label">Timeout (s)</label>
+                        <input name="timeout_seconds" type="number" class="form-control" value="{{ setting.timeout_seconds or 40 }}">
+                    </div>
+
+                    <div class="col-6 col-md-3">
+                        <label class="form-label">Departure default</label>
+                        <input name="departure_default" class="form-control" value="{{ setting.departure_default or 'VCE' }}">
+                    </div>
+
+                    <div class="col-6 col-md-3">
+                        <label class="form-label">LOS min</label>
+                        <input name="los_min" type="number" class="form-control" value="{{ setting.los_min or 7 }}">
+                    </div>
+
+                    <div class="col-6 col-md-3">
+                        <label class="form-label">LOS max</label>
+                        <input name="los_max" type="number" class="form-control" value="{{ setting.los_max or 14 }}">
+                    </div>
+
+                    <div class="col-12 d-flex gap-2">
+                        <button type="submit" class="btn btn-primary">Save</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Colonna destra: due card -->
+    <div class="col-12 col-lg-4">
+
+        <!-- Product Cache Importer -->
+        <div class="card shadow-sm">
+            <div class="card-header">Product Cache Importer</div>
+            <div class="card-body">
+                <form id="updateSyncForm" method="get" action="{{ url_for('products.ota_update_products') }}"
+                      data-spinner="Import running..." class="row gy-2 gx-3">
+
+                    <div class="col-6 col-md-6">
+                        <label class="form-label">Limit (opz.)</label>
+                        <input type="number" name="limit" class="form-control"
+                               min="1" step="1" inputmode="numeric"
+                               value="{{ request.args.get('limit')}}" placeholder="es. 10">
+                    </div>
+
+                    <div class="col-auto d-flex align-items-center mt-4">
+                        <div class="form-check me-3">
+                            <input class="form-check-input" type="checkbox" id="only_missing" name="only_missing" value="1">
+                            <label class="form-check-label" for="only_missing">Only Missing</label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="debug" name="debug" value="1">
+                            <label class="form-check-label" for="debug">Debug</label>
+                        </div>
+                    </div>
+
+                    <!-- RIGA BOTTONI: PRODUCT -->
+                    <div id="prod-cta-row" class="col-12 cta-row mt-2">
+                        <button class="btn btn-warning btn-same" type="submit">Import</button>
+                        <button class="btn btn-danger btn-same"
+                                type="submit" form="clearProductsForm"
+                                onclick="return confirm('Confermi di cancellare tutta la cache prodotti?');">
+                            Delete
+                        </button>
+                        <a class="btn btn-info btn-same" href="{{ url_for('products.ota_products') }}"
+                           data-spinner="Opening Products ...">View Products</a>
+
+                        <!-- spinner inline per PRODUCT -->
+                        <div id="prod-spinner" class="d-none d-flex align-items-center ms-auto">
+                            <div class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></div>
+                            <span>Working…</span>
+                        </div>
+                    </div>
+
+                    <div class="col-12">
+                        <small class="text-muted">Endpoint: <code>/products.ota_update_products</code></small>
+                    </div>
+                </form>
+                <!-- form nascosto per Delete prodotti -->
+                <form id="clearProductsForm" method="post" action="{{ url_for('admin.clear_products_cache') }}">
+                </form>
+            </div>
+        </div>
+
+        <!-- Departure Cache Importer -->
+        <div class="card shadow-sm mt-3">
+            <div class="card-header">Departure Cache Importer</div>
+            <div class="card-body">
+                <div class="row gy-2 gx-3">
+                    <div class="col-12">
+                        <label class="form-label">Folder JSON (opz.)</label>
+                        <input id="dep_json_dir" class="form-control" placeholder="es. data/downloads">
+                    </div>
+
+                    <!-- RIGA BOTTONI: DEPARTURES -->
+                    <div id="dep-cta-row" class="col-12 cta-row mt-2">
+                        <a href="{{ url_for('admin.download_departures_zip') }}"
+                           class="btn btn-secondary btn-same"
+                           data-spinner="Downloading and uncompress in tmp folder">Download</a>
+
+                        <button id="btn-start-dep" class="btn btn-primary btn-same" type="button">Import</button>
+
+                        <button class="btn btn-danger btn-same" type="submit" form="clearDeparturesForm"
+                                onclick="return confirm('Confermi di cancellare tutta la cache partenze?');">
+                            Delete
+                        </button>
+                    </div>
+
+                    <!-- PROGRESS BAR -->
+                    <div class="col-12 mt-2">
+                        <div class="progress" style="height:10px;">
+                            <div id="dep-progress-bar" class="progress-bar" role="progressbar"
+                                 style="width:0%;" aria-valuemin="0" aria-valuemax="100"></div>
+                        </div>
+                    </div>
+
+                    <!-- SPINNER + TESTO SOTTO LA BARRA -->
+                    <div class="col-12 mt-2 d-none align-items-center" id="dep-spinner">
+                        <div class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></div>
+                        <span id="dep-progress-text">Preparazione…</span>
+                    </div>
+
+                    <div class="col-12">
+                        <small id="dep-msg" class="text-muted"></small>
+                    </div>
+                </div>
+                <!-- form nascosto per Delete partenze -->
+                <form id="clearDeparturesForm" method="post" action="{{ url_for('admin.clear_departures_cache') }}"></form>
+            </div>
+        </div>
+
+    </div> <!-- /col destra -->
+</div> <!-- /row -->
+<!-- JS -->
+<script>
+  // Helpers visibilità (niente style.display per evitare conflitti con !important di Bootstrap)
+  function showFlex(el){ if(!el) return; el.classList.remove('d-none'); el.classList.add('d-flex'); }
+  function hideEl(el){ if(!el) return; el.classList.remove('d-flex'); el.classList.add('d-none'); }
+
+  // --- Import partenze con polling ---
+  (function () {
+    const btn  = document.getElementById('btn-start-dep');
+    const spin = document.getElementById('dep-spinner');
+    const text = document.getElementById('dep-progress-text');
+    const msg  = document.getElementById('dep-msg');
+    const bar  = document.getElementById('dep-progress-bar');
+
+    const URL_START = "{{ url_for('imports.start_import') }}";
+    const URL_PROG  = "{{ url_for('imports.get_progress') }}";
+
+    let timer = null;
+
+    function setBar(done, total) {
+      let pct = 0;
+      if (total > 0) pct = Math.max(0, Math.min(100, Math.round((done / total) * 100)));
+      bar.style.width = pct + '%';
+      bar.setAttribute('aria-valuenow', pct);
+    }
+
+    async function pollDepProgress() {
+      try {
+        const r = await fetch(URL_PROG, { cache: 'no-store', credentials: 'same-origin' });
+        if (!r.ok) { msg.textContent = `Progress HTTP ${r.status}`; return; }
+        const p = await r.json();
+
+        if (p.running) {
+          showFlex(spin);                 // mostra spinner sotto la barra
+          if (btn) btn.disabled = true;
+
+          const total = p.total || 0, done = p.done || 0;
+          const base  = (total > 0) ? `Importing ${done} / ${total} file…` : 'Scansione file…';
+          const file  = p.current_file ? ` — ${p.current_file}` : '';
+          const tail  = p.last_msg ? ` — ${p.last_msg}` : '';
+          text.textContent = base + file + tail;
+          if (p.rows) msg.textContent = `Righe importate: ${p.rows}`;
+          setBar(done, total);
+        } else {
+          if (timer) { clearInterval(timer); timer = null; }
+          if (btn) btn.disabled = false;
+          text.textContent = p.error ? 'Errore durante l’import.' : `Completato. Righe aggiornate: ${p.rows || 0}`;
+          msg.textContent  = p.finished_at ? `Finito alle ${p.finished_at}` : '';
+          setBar(p.done || 0, p.total || 0);
+          setTimeout(() => { hideEl(spin); }, 600);   // nascondi spinner
+        }
+      } catch (e) {
+        msg.textContent = `Progress network error: ${e}`;
+        console.error(e);
+      }
+    }
+
+    if (btn) {
+      btn.addEventListener('click', async () => {
+        msg.textContent = ''; text.textContent = 'Avvio…';
+        showFlex(spin); btn.disabled = true;
+
+        try {
+          const r = await fetch(URL_START, { method: 'POST', credentials: 'same-origin' });
+          if (r.status === 202 || r.status === 409) {
+            if (timer) clearInterval(timer);
+            timer = setInterval(pollDepProgress, 700);
+            return;
+          }
+          msg.textContent = `Errore ${r.status}`;
+          hideEl(spin); btn.disabled = false;
+        } catch (e) {
+          msg.textContent = `Network error: ${e}`;
+          hideEl(spin); btn.disabled = false;
+        }
+      });
+    }
+  })();
+
+  // --- Spinner & disable sui DELETE (prod + dep) ---
+  (function () {
+    // prodotti
+    const prodDelForm = document.getElementById('clearProductsForm');
+    const prodRow     = document.getElementById('prod-cta-row');
+    const prodSpin    = document.getElementById('prod-spinner');
+    if (prodDelForm && prodRow && prodSpin) {
+      prodDelForm.addEventListener('submit', function () {
+        prodSpin.querySelector('span').textContent = 'Deleting…';
+        prodSpin.classList.remove('d-none'); // già ha d-flex
+        prodRow.querySelectorAll('button, a.btn').forEach(el => {
+          el.classList.add('disabled'); el.setAttribute('aria-disabled', 'true');
+        });
+      });
+    }
+
+    // partenze
+    const depDelForm = document.getElementById('clearDeparturesForm');
+    const depRow     = document.getElementById('dep-cta-row');
+    const depSpin    = document.getElementById('dep-spinner');
+    const depText    = document.getElementById('dep-progress-text');
+    if (depDelForm && depRow && depSpin && depText) {
+      depDelForm.addEventListener('submit', function () {
+        depText.textContent = 'Deleting…';
+        showFlex(depSpin);
+        depRow.querySelectorAll('button, a.btn').forEach(el => {
+          el.classList.add('disabled'); el.setAttribute('aria-disabled', 'true');
+        });
+      });
+    }
+  })();
+
+  // --- Reset sicuro UI partenze su load / back-forward cache ---
+  (function () {
+    const btn = document.getElementById('btn-start-dep');
+    const spin = document.getElementById('dep-spinner');
+    const text = document.getElementById('dep-progress-text');
+    const msg  = document.getElementById('dep-msg');
+    const bar  = document.getElementById('dep-progress-bar');
+
+    function resetDeparturesUI() {
+      hideEl(spin);
+      if (text) text.textContent = 'Preparazione…';
+      if (msg)  msg.textContent  = '';
+      if (btn)  btn.disabled = false;
+      if (bar) {
+        bar.style.width = '0%';
+        bar.setAttribute('aria-valuenow', '0');
+      }
+    }
+
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', resetDeparturesUI);
+    } else {
+      resetDeparturesUI();
+    }
+
+    window.addEventListener('pageshow', function (e) {
+      if (e.persisted) resetDeparturesUI();
+    });
+  })();
+</script>
+
+<style>
+    /* Righe CTA: flex + allunga tutti gli item alla stessa altezza */
+    .cta-row {
+        display: flex;
+        gap: .5rem;
+        align-items: stretch;
+    }
+
+    /* Bottoni normalizzati (funziona uguale su <a> e <button>) */
+    .btn-same {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0 .9rem !important;
+        min-height: 44px;
+        line-height: 1 !important;
+        white-space: nowrap;
+        margin: 0;
+    }
+</style>
+{% endblock %}

@@ -1,0 +1,265 @@
+﻿{% extends "base.html" %}
+{% block title %}Quotation{% endblock %}
+
+{% block content %}
+<div class="container py-3">
+    <div class="d-flex justify-content-between align-items-center mb-2">
+        <h3 class="mb-0">Quotation</h3>
+        <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('home.home') }}">Home</a>
+    </div>
+
+    <div class="small text-muted mb-2">
+        dbg → services={{ services|length }}, flights={{ flights|length }}, images={{ images|length }},
+        property={{ property and '1' or '0' }}, prop={{ prop and '1' or '0' }},
+        room={{ room and '1' or '0' }}, rateplan={{ rateplan and '1' or '0' }}, note={{ note and '1' or '0' }}
+    </div>
+
+
+    <div class="small text-muted mb-3">
+        Booking Code: <strong>{{ booking_code or '-' }}</strong> &middot;
+        Product: <code>{{ product_code or '-' }}</code> &middot;
+        {{ start_date or '-' }} &rarr; {{ nights or 0 }} nights &middot; {{ currency or 'EUR' }}
+    </div>
+
+    {# ---- Hotel / Property ---- #}
+    {% if property or room or rateplan or note or images %}
+    <div class="card mb-3">
+        <div class="card-body">
+            <div class="d-flex flex-wrap align-items-start gap-3">
+                {% if images and images|length %}
+                <div style="width: 220px; max-width: 100%;">
+                    <img src="{{ images[0] }}" alt="Cover" class="img-fluid rounded border" />
+                    {% if images|length > 1 %}
+                    <div class="mt-2 d-flex flex-wrap gap-1">
+                        {% for u in images[1:5] %}
+                        <img src="{{ u }}" class="rounded border" style="width:48px;height:48px;object-fit:cover;" alt="img{{ loop.index }}" />
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+                </div>
+                {% endif %}
+
+                <div class="flex-grow-1">
+                    <h5 class="mb-1">
+                        {{ property.name or 'Property' }}
+                        {% if property.city_name or property.country_name %}
+                        <small class="text-muted"> · {{ property.city_name }}{% if property.country_name %}, {{ property.country_name }}{% endif %}</small>
+                        {% endif %}
+                    </h5>
+                    <div class="small text-muted mb-2">
+                        {{ property.product_type_name or property.product_type }}{% if property.category_detail %} · {{ property.category_detail }}{% endif %}
+                        {% if property.code %} · <code>{{ property.code }}</code>{% endif %}
+                    </div>
+
+                    {% if room.name or rateplan.name %}
+                    <div class="mb-1">
+                        <span class="badge bg-secondary">{{ room.name or room.code }}</span>
+                        {% if rateplan.name %}<span class="badge bg-info text-dark">{{ rateplan.name }}</span>{% endif %}
+                        {% if rateplan.meal_plan_codes %}<span class="badge bg-light text-dark">Meal: {{ rateplan.meal_plan_codes }}</span>{% endif %}
+                    </div>
+                    {% endif %}
+
+                    {% if note %}
+                    <div class="mt-2">{{ note }}</div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    {# ---- Flights ---- #}
+    {% if flights and flights|length %}
+    <div class="card mb-3">
+        <div class="card-header py-2"><strong>Flights</strong></div>
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-sm mb-0 align-middle">
+                    <thead>
+                        <tr>
+                            <th style="width:12%">Direction</th>
+                            <th style="width:20%">Departure</th>
+                            <th style="width:20%">Arrival</th>
+                            <th style="width:12%">Flight</th>
+                            <th>Airline</th>
+                            <th style="width:10%" class="text-end">Baggage</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for f in flights %}
+                        {% set dir = 'Outbound' if f.od_rph == '1' else ('Return' if f.od_rph == '2' else 'Segment') %}
+                        <tr>
+                            <td>{{ dir }}</td>
+                            <td>
+                                <div class="fw-semibold">
+                                    {{ f.departure.airport }} → {{ f.arrival.airport }}
+                                </div>
+                                <div class="small text-muted">
+                                    {{ f.departure.datetime or '' }}
+                                </div>
+                            </td>
+                            <td>
+                                <div class="fw-semibold">{{ f.arrival.name or '-' }}</div>
+                                <div class="small text-muted">{{ f.arrival.datetime or '' }}</div>
+                            </td>
+                            <td>
+                                <div class="fw-semibold">{{ f.flight_number }}</div>
+                                <div class="small text-muted">Class {{ f.booking_class or '-' }}</div>
+                            </td>
+                            <td>
+                                <div class="fw-semibold">{{ f.marketing.name or f.operating.name or '-' }}</div>
+                                <div class="small text-muted">
+                                    {{ f.marketing.code or f.operating.code or '' }}
+                                </div>
+                            </td>
+                            <td class="text-end">
+                                {% if f.baggage and (f.baggage.weight or f.baggage.unit) %}
+                                {{ f.baggage.weight }} {{ f.baggage.unit }}
+                                {% else %}-{% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    {# ---- Cancellation policy ---- #}
+    {% if cancel_policies and cancel_policies|length %}
+    <div class="alert alert-warning mb-3">
+        <div class="fw-bold mb-1">Cancellation policy</div>
+        <ul class="mb-0">
+            {% for cp in cancel_policies %}
+            <li>
+                {% if cp.non_refundable %}<strong>Non refundable</strong>. {% endif %}
+                {% if cp.deadline.multiplier and cp.deadline.unit %}
+                Deadline: {{ cp.deadline.multiplier }} {{ cp.deadline.unit|lower }} before arrival.
+                {% endif %}
+                {% if cp.amount_percent.percent %}
+                Penalty: {{ cp.amount_percent.percent }}% ({{ cp.amount_percent.basis or 'FullStay' }}).
+                {% endif %}
+            </li>
+            {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+
+    {# ---- Price Age Bands ---- #}
+    {% if price_age_bands and price_age_bands|length %}
+    <div class="small text-muted mb-3">
+        <strong>Price age bands:</strong>
+        {% for b in price_age_bands %}
+        <span class="badge bg-light text-dark">min {{ b.min }} – max {{ b.max }}</span>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    {# ---- Itinerary ---- #}
+    {% if itineraries and itineraries|length %}
+    <div class="card mb-3">
+        <div class="card-header py-2"><strong>Itinerary</strong></div>
+        <div class="card-body">
+            <ol class="mb-0">
+                {% for it in itineraries %}
+                <li class="mb-1">
+                    <span class="fw-semibold">{{ it.label or ('Day ' ~ loop.index) }}</span>
+                    {% if it.text %} — {{ it.text }}{% endif %}
+                    {% if it.destinations and it.destinations|length %}
+                    <div class="small text-muted">
+                        {{ it.destinations | map(attribute='name') | list | join(', ') }}
+                    </div>
+                    {% endif %}
+                </li>
+                {% endfor %}
+            </ol>
+        </div>
+    </div>
+    {% endif %}
+
+    {# ---- Reservation IDs ---- #}
+    {% if reservation_ids and reservation_ids|length %}
+    <div class="small text-muted mb-3">
+        <strong>Reservation IDs:</strong>
+        {% for rid in reservation_ids %}
+        <code class="me-2">{{ rid.type }}: {{ rid.value }}</code>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    {# ---- Services Table ---- #}
+    <div class="table-responsive">
+        <table class="table table-sm align-middle">
+            <thead>
+                <tr>
+                    <th style="width:30%">Service</th>
+                    <th>Category</th>
+                    <th class="text-end">Unit</th>
+                    <th class="text-end">Qty</th>
+                    <th class="text-end">Subtotal</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% set subtotal = 0 %}
+                {% for s in services %}
+                {% set line = (s.total if s.total is not none else (s.unit_price or 0) * (s.qty or 1)) %}
+                {% set subtotal = subtotal + (line or 0) %}
+                <tr>
+                    <td>{{ s.name }}</td>
+                    <td>{{ s.category }}</td>
+                    <td class="text-end">
+                        {{ s.unit_price is not none and ("%0.2f"|format(s.unit_price)) or "-" }}
+                    </td>
+                    <td class="text-end">{{ s.qty }}</td>
+                    <td class="text-end">{{ "%0.2f"|format(line or 0) }}</td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="5" class="text-center text-muted">No services returned.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+            <tfoot>
+                {% if taxes and taxes|length %}
+                {% for t in taxes %}
+                <tr>
+                    <th colspan="4" class="text-end">Tax: {{ t.name }}</th>
+                    <th class="text-end">{{ "%0.2f"|format(t.amount) }}</th>
+                </tr>
+                {% endfor %}
+                {% endif %}
+                {% if fees and fees|length %}
+                {% for f in fees %}
+                <tr>
+                    <th colspan="4" class="text-end">Fee: {{ f.name }}</th>
+                    <th class="text-end">{{ "%0.2f"|format(f.amount) }}</th>
+                </tr>
+                {% endfor %}
+                {% endif %}
+                <tr class="table-dark">
+                    <th colspan="4" class="text-end">Grand total ({{ currency or 'EUR' }})</th>
+                    <th class="text-end">
+                        {% if grand_total is not none %}
+                        {{ "%0.2f"|format(grand_total) }}
+                        {% else %}
+                        {{
+                         "%0.2f"|format(
+                            (subtotal or 0) +
+                            (taxes|map(attribute='amount')|sum if taxes else 0) +
+                            (fees|map(attribute='amount')|sum if fees else 0)
+                         )
+                        }}
+                        {% endif %}
+                    </th>
+                </tr>
+            </tfoot>
+        </table>
+    </div>
+
+    <details class="mt-3">
+        <summary>RAW XML</summary>
+        <pre class="small bg-dark text-light p-2 rounded" style="white-space: pre-wrap;">{{ raw_xml }}</pre>
+    </details>
+</div>
+{% endblock %}

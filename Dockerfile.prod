@@ -1,0 +1,58 @@
+# ===== builder =====
+FROM python:3.11-slim AS builder
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential gcc libffi-dev libssl-dev \
+ && rm -rf /var/lib/apt/lists/*
+WORKDIR /build
+COPY requirements.txt .
+RUN pip wheel --no-cache-dir --wheel-dir /wheels -r requirements.txt
+
+# ===== runtime =====
+FROM python:3.11-slim
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
+    TZ=Europe/Rome PORT=8001 PIP_NO_CACHE_DIR=1 \
+    DATA_DIR=/data APP_DATA_DIR=/app/data APP_DB_PATH=/data/ota.db
+
+# + gosu per drop privilegi a runtime
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl ca-certificates tzdata gosu \
+ && rm -rf /var/lib/apt/lists/*
+
+# utente non-root
+RUN useradd -ms /bin/bash appuser
+
+WORKDIR /app
+RUN mkdir -p /app/app /seed /app/logs
+
+# deps python
+COPY --from=builder /wheels /wheels
+RUN pip install --no-cache-dir /wheels/* && rm -rf /wheels
+
+# >>> codice app <<<
+COPY app/ /app/app/
+COPY static/ /app/static/
+COPY templates/ /app/templates/
+
+# seed DB (sorgente per prima esecuzione)
+COPY data/ota.db /seed/ota.db
+
+# wsgi/requirements/start
+COPY requirements.txt /app/requirements.txt
+COPY wsgi.py /app/wsgi.py
+COPY start.sh /app/start.sh
+COPY app/services/import_departures.py /app/import_departures.py
+
+# permessi su /app e /seed (ok farli ora)
+RUN chmod +x /app/start.sh && chown -R appuser:appuser /app /seed
+
+EXPOSE 8001
+
+# volume persistente per il DB scrivibile
+VOLUME ["/data"]
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=5 \
+  CMD curl -fsS "http://localhost:${PORT}/" || exit 1
+
+# IMPORTANTE: resta root qui; lo start.sh farà chown su /data e poi gosu appuser
+CMD ["/app/start.sh"]

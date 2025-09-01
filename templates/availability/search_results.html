@@ -1,0 +1,290 @@
+﻿{% extends "base.html" %}
+{% block title %}Availability{% endblock %}
+{% block content %}
+<div class="container py-3">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h3 class="mb-0">Availability</h3>
+        <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('home.home') }}">Home</a>
+    </div>
+    {% set curr = currency or (meta.request.currency if meta and meta.request else None) or (meta.currency if meta else None) or 'EUR' %}
+
+    <div class="mb-3 small text-muted">
+        <strong>Search:</strong>
+        {{ destina }} from {{ aptfrom or 'ANY' }},
+        {{ start_date }} → {{ end_date }}
+        ({{ nights }} nights) · Rooms {{ rooms }}, Adults {{ adults }}
+        {% if children_ages %}, Children {{ children_ages|join(', ') }}{% endif %}
+        · Currency <span id="dbg-curr">{{ curr }}</span>
+    </div>
+
+    {% if meta.raw_errors %}
+    <div class="alert alert-warning">
+        <strong>Warnings:</strong>
+        <ul class="mb-0">
+            {% for e in meta.raw_errors %}
+            <li>{{ e }}</li>
+            {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+
+    {% if offers and offers|length %}
+    {# --- UNA OFFERTA PER RIGA --- #}
+    {% for o in offers %}
+    <div class="card mb-3 shadow-sm">
+        <div class="card-body">
+            <div class="d-flex gap-3">
+                {# Immagine a sinistra (prima immagine del prodotto, se presente) #}
+                {% if o.image %}
+                <img src="{{ o.image }}" alt="" class="rounded border"
+                     style="width: 200px; height: 130px; object-fit: cover;">
+                {% endif %}
+
+                <div class="flex-grow-1">
+                    <div class="d-flex justify-content-between align-items-start flex-wrap gap-2">
+                        <div>
+                            <h5 class="card-title mb-1">
+                                {{ o.product_name or o.name or 'Offerta' }}
+                            </h5>
+
+                            {% if o.rate_plan %}
+                            <div class="text-muted small">{{ o.rate_plan }}</div>
+                            {% endif %}
+
+                            {# 🔹 Servizio/Tipologia principale in evidenza: "CAMERA ... (DBLR)" #}
+                            {% if o.room_name or o.room_code or o.room_type %}
+                            <div class="small fw-semibold">
+                                {{ (o.room_name or o.room_type or '')|upper }}
+                                {% if o.room_code %} ({{ o.room_code }}){% endif %}
+                            </div>
+                            {% endif %}
+
+                            {% if o.board_name or o.board %}
+                            <div class="small">Board: {{ o.board_name or o.board }}</div>
+                            {% endif %}
+
+                            {# 🔹 Elenco TUTTI i servizi/tipologie con descrizione #}
+                            {% if o.services and o.services|length %}
+                            <div class="small text-muted mt-2">Tipologie/Servizi disponibili:</div>
+                            <ul class="small mb-0 ps-3">
+                                {% for s in o.services %}
+                                <li>{{ (s.name or '')|upper }}{% if s.code %} ({{ s.code }}){% endif %}</li>
+                                {% endfor %}
+                            </ul>
+                            {% elif o.services_display and o.services_display|length %}
+                            <div class="small text-muted mt-2">
+                                Tipologie/Servizi disponibili:
+                                {{ o.services_display|join(' · ') }}
+                            </div>
+                            {% endif %}
+                        </div>
+
+                        {# PREZZO IN EVIDENZA #}
+                        <div class="text-end">
+                            {% if o.total_price %}
+                            <div class="fw-bold fs-3 lh-1">
+                                {{ o.total_price }} {{ meta.currency or o.currency }}
+                            </div>
+                            <div class="small text-muted">totale soggiorno</div>
+                            {% else %}
+                            <span class="badge text-bg-secondary">Prezzo non disponibile</span>
+                            {% endif %}
+                        </div>
+                    </div>
+
+                    {# PERIODI #}
+                    <div class="mt-2 small text-muted">
+                        {% set _start = o.start or meta.request.start_date %}
+                        {% set _end   = o.end   or meta.request.end_date %}
+                        <span>Periodo: {{ _start }} → {{ _end }}</span>
+                        {% if o.booking_code %}
+                        &middot; <span>BookingCode: <code>{{ o.booking_code }}</code></span>
+                        {% endif %}
+                    </div>
+
+                    {# DETTAGLI QUOTE COMPATTI #}
+                    <div class="mt-3">
+                        <div class="row g-2">
+                            {% if o.cancellation %}
+                            <div class="col-12 col-md-6">
+                                <div class="border rounded p-2">
+                                    <div class="fw-semibold small mb-1">Cancellazione</div>
+                                    <div class="small">{{ o.cancellation }}</div>
+                                </div>
+                            </div>
+                            {% endif %}
+
+                            {% if o.rate_plan_code or o.activity_type %}
+                            <div class="col-12 col-md-6">
+                                <div class="border rounded p-2">
+                                    <div class="fw-semibold small mb-1">Piano/Tipo</div>
+                                    <div class="small">
+                                        {% if o.rate_plan_code %}RatePlan: <code>{{ o.rate_plan_code }}</code>{% endif %}
+                                        {% if o.activity_type %}{% if o.rate_plan_code %} &middot; {% endif %}Type: <code>{{ o.activity_type }}</code>{% endif %}
+                                    </div>
+                                </div>
+                            </div>
+                            {% endif %}
+                        </div>
+                    </div>
+
+                    {# 🔹 VOLI (se presenti nella risposta) #}
+                    {% if o.flights and o.flights|length %}
+                    <div class="mt-3">
+                        <div class="fw-semibold small mb-1">
+                            Voli{% if o.flight_direction %} ({{ o.flight_direction }}){% endif %}
+                        </div>
+                        <div class="table-responsive">
+                            <table class="table table-sm table-bordered align-middle mb-0">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th style="width: 72px;">Dir</th>
+                                        <th>Partenza</th>
+                                        <th>Arrivo</th>
+                                        <th>Volo</th>
+                                        <th>Compagnia</th>
+                                        <th>Bagaglio</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for f in o.flights %}
+                                    {% set dir = 'OUT' if (f.od_rph == '1') else ( 'IN' if (f.od_rph == '2') else f.od_rph ) %}
+                                    <tr>
+                                        <td><span class="badge text-bg-secondary">{{ dir }}</span></td>
+                                        <td class="small">
+                                            {{ f.departure.datetime }}
+                                            <div class="text-muted">
+                                                {{ f.departure.airport }}{% if f.departure.name %} · {{ f.departure.name }}{% endif %}
+                                            </div>
+                                        </td>
+                                        <td class="small">
+                                            {{ f.arrival.datetime }}
+                                            <div class="text-muted">
+                                                {{ f.arrival.airport }}{% if f.arrival.name %} · {{ f.arrival.name }}{% endif %}
+                                            </div>
+                                        </td>
+                                        <td class="small">
+                                            {{ f.flight_number }}
+                                            {% if f.booking_class %}<div class="text-muted">Classe: {{ f.booking_class }}</div>{% endif %}
+                                        </td>
+                                        <td class="small">
+                                            {% if f.marketing.code or f.marketing.name %}
+                                            {{ f.marketing.code }}{% if f.marketing.name %} · {{ f.marketing.name }}{% endif %}
+                                            {% elif f.operating.code or f.operating.name %}
+                                            {{ f.operating.code }}{% if f.operating.name %} · {{ f.operating.name }}{% endif %}
+                                            {% else %}-{% endif %}
+                                        </td>
+                                        <td class="small">
+                                            {% if f.baggage.weight %}
+                                            {{ f.baggage.weight }} {{ f.baggage.unit or '' }}
+                                            {% else %}
+                                            -
+                                            {% endif %}
+                                        </td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    {% endif %}
+
+
+                    {# DETTAGLI COMPLETI (collassabili) #}
+                    <details class="mt-3">
+                        <summary class="small text-primary" style="cursor:pointer;">Dettagli completi</summary>
+                        <div class="mt-2">
+                            <div class="table-responsive">
+                                <table class="table table-sm table-bordered align-middle mb-2">
+                                    <tbody>
+                                        {% if o.product_name or o.name %}
+                                        <tr><th class="w-25">Nome</th><td>{{ o.product_name or o.name }}</td></tr>
+                                        {% endif %}
+
+                                        {% if o.room_name or o.room_code or o.room_type %}
+                                        <tr>
+                                            <th>Camera / Servizio</th>
+                                            <td>
+                                                {{ (o.room_name or o.room_type or '')|upper }}
+                                                {% if o.room_code %} ({{ o.room_code }}){% endif %}
+                                            </td>
+                                        </tr>
+                                        {% endif %}
+
+                                        {% if o.services and o.services|length %}
+                                        <tr>
+                                            <th>Tipologie/Servizi</th>
+                                            <td>
+                                                <ul class="mb-0 ps-3">
+                                                    {% for s in o.services %}
+                                                    <li>{{ (s.name or '')|upper }}{% if s.code %} ({{ s.code }}){% endif %}</li>
+                                                    {% endfor %}
+                                                </ul>
+                                            </td>
+                                        </tr>
+                                        {% elif o.services_display and o.services_display|length %}
+                                        <tr>
+                                            <th>Tipologie/Servizi</th>
+                                            <td>{{ o.services_display|join(' · ') }}</td>
+                                        </tr>
+                                        {% endif %}
+
+                                        {% if o.rate_plan %}
+                                        <tr><th>Rate plan</th><td>{{ o.rate_plan }}</td></tr>
+                                        {% endif %}
+
+                                        {% if o.board_name or o.board %}
+                                        <tr><th>Trattamento</th><td>{{ o.board_name or o.board }}</td></tr>
+                                        {% endif %}
+
+                                        {% if o.start or o.end %}
+                                        <tr><th>Date</th><td>{{ (o.start or meta.request.start_date) }} → {{ (o.end or meta.request.end_date) }}</td></tr>
+                                        {% endif %}
+
+                                        {% if o.currency or o.total_price %}
+                                        <tr><th>Totale</th><td>{{ o.total_price }} {{ meta.currency or o.currency }}</td></tr>
+                                        {% endif %}
+
+                                        {% if o.booking_code %}
+                                        <tr><th>BookingCode</th><td><code>{{ o.booking_code }}</code></td></tr>
+                                        {% endif %}
+                                    </tbody>
+                                </table>
+                            </div>
+
+                            {# Dump tecnico per avere TUTTO a portata #}
+                            <pre class="small bg-light p-2 rounded border">{{ o | tojson(indent=2) }}</pre>
+                        </div>
+                    </details>
+                </div>
+            </div>
+        </div>
+
+        <div class="card-footer bg-transparent">
+            {% if o.book_url %}
+            <a class="btn btn-primary btn-sm" href="{{ o.book_url }}">Book</a>
+            {% elif o.booking_code %}
+            <form method="post" action="{{ url_for('availability.quote_by_code') }}" class="d-flex gap-2 align-items-center mb-0">
+                <input type="hidden" name="booking_code" value="{{ o.booking_code }}">
+                <input type="hidden" name="start_date" value="{{ meta.request.start_date }}">
+                <input type="hidden" name="end_date" value="{{ meta.request.end_date }}">
+                <input type="hidden" name="aptfrom" value="{{ meta.request.aptfrom }}">
+                <input type="hidden" name="adults" value="{{ meta.request.adults }}">
+                {% if meta.request.children_ages %}
+                <input type="hidden" name="children_ages" value="{{ meta.request.children_ages | join(',') }}">
+                {% endif %}
+                {# passa anche l'immagine al quote, se presente #}
+                {% if o.image %}
+                <input type="hidden" name="image" value="{{ o.image }}">
+                {% endif %}
+                <button class="btn btn-primary btn-sm" type="submit">Quote</button>
+            </form>
+            {% endif %}
+        </div>
+    </div>
+    {% endfor %}
+    {% else %}
+    <div class="alert alert-info">No availability for the selected criteria.</div>
+    {% endif %}
+</div>
+{% endblock %}
