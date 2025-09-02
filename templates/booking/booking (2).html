@@ -175,83 +175,19 @@
         const selNights = $('#nights');
         const spinner = $('#globalSpinner');
 
-        function showSpinner(on) { if (spinner) spinner.classList.toggle('d-none', !on); }
+        function showSpinner(on) {
+            if (!spinner) return;
+            spinner.classList.toggle('d-none', !on);
+        }
+
         function addDays(isoDate, days) {
             const d = new Date(isoDate);
             d.setDate(d.getDate() + (parseInt(days, 10) || 0));
             return d.toISOString().slice(0, 10);
         }
-        // Chiave data locale stabile YYYY-MM-DD
-        function dateKey(d) {
-            const y = d.getFullYear();
-            const m = String(d.getMonth() + 1).padStart(2, '0');
-            const dd = String(d.getDate()).padStart(2, '0');
-            return `${y}-${m}-${dd}`;
-        }
 
-        const deps = new Set(); // date abilitate
-        const durMap = new Map(); // ISO -> nights
-        const aptMap = new Map(); // ISO -> Set(IATA/label)
-
-        // === Estrazione IATA molto tollerante da una stringa aeroporto ===
-        function pickIata(s) {
-            const v = (s ?? '').toString().trim();
-            if (!v) return '';
-
-            // Casi tipici:
-            // "MXP" | "MXP - Milano Malpensa" | "Milano Malpensa (MXP)" | "...#MXP2"
-            // 1) parentesi: prendi l'ultimo (ABC) se presente
-            const paren = v.match(/\(([A-Z]{3})\)/g);
-            if (paren && paren.length) {
-                const last = paren[paren.length - 1].match(/\(([A-Z]{3})\)/);
-                if (last) return last[1];
-            }
-
-            // 2) #ABC2 o #ABC: prendi ABC
-            const hashIata = v.match(/#([A-Z]{3})(\d)?\b/);
-            if (hashIata) return hashIata[1];
-
-            // 3) inizio stringa "ABC" o "ABC - ..."
-            const startIata = v.match(/^\s*([A-Z]{3})\b/);
-            if (startIata) return startIata[1];
-
-            // 4) qualunque ABC isolato all'interno
-            const anyIata = v.match(/\b([A-Z]{3})\b/);
-            if (anyIata) return anyIata[1];
-
-            // 5) ultima spiaggia: prime 3 lettere alfabetiche
-            return v.replace(/[^A-Za-z]/g, '').slice(0, 3).toUpperCase();
-        }
-
-        function iataFromRow(it) {
-            // Usa preferenzialmente depart_airport (come da DB)
-            const fields = [
-                'depart_airport',
-                // fallback possibili se il backend in futuro usa nomi diversi
-                'departure_airport', 'departAirport', 'departureAirport',
-                'airport', 'airport_name', 'airport_code',
-                'product_code', 'tour_activity_code', 'code'
-            ];
-            for (const f of fields) {
-                if (it && f in it && it[f]) {
-                    const iata = pickIata(it[f]);
-                    if (iata) return iata;
-                }
-            }
-            return '';
-        }
-
-        function currentAptValue() {
-            const val = (selApt?.value || '').trim();
-            if (!val) return '';
-            // prova direttamente IATA
-            const m = val.match(/\b([A-Z]{3})\b/);
-            if (m) return m[1];
-            // se è "MXP2" o simile
-            const m2 = val.match(/\b([A-Z]{3})\d\b/);
-            if (m2) return m2[1];
-            return val.replace(/[^A-Za-z]/g, '').slice(0, 3).toUpperCase();
-        }
+        const deps = new Set();
+        const durMap = new Map();
 
         let fp = null;
         function initFlatpickr() {
@@ -270,23 +206,12 @@
                     endInput.value = dateStr ? addDays(dateStr, n) : "";
                 },
                 onDayCreate: (_, __, ___, dayElem) => {
-                    const iso = dateKey(dayElem.dateObj);
-                    if (!deps.has(iso)) return;
-
-                    dayElem.classList.add("available-day");
-
-                    let airportLabel = '';
-                    if (aptMap.has(iso) && aptMap.get(iso).size) {
-                        airportLabel = Array.from(aptMap.get(iso)).join(', ');
-                    } else {
-                        airportLabel = currentAptValue();
+                    const d = dayElem.dateObj;
+                    const iso = new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+                    if (deps.has(iso)) {
+                        dayElem.classList.add("available-day");
+                        if (durMap.has(iso)) dayElem.title = `Available (${durMap.get(iso)} nights)`;
                     }
-
-                    const nightsLabel = durMap.has(iso) ? `${durMap.get(iso)} nights` : '';
-                    const parts = [];
-                    if (airportLabel) parts.push(airportLabel);
-                    if (nightsLabel) parts.push(nightsLabel);
-                    dayElem.title = parts.join(' - ');
                 }
             });
         }
@@ -294,7 +219,6 @@
         async function loadDepartures() {
             deps.clear();
             durMap.clear();
-            aptMap.clear();
             startInput.value = '';
             endInput.value = '';
 
@@ -313,30 +237,13 @@
                 if (!res.ok) throw new Error('HTTP ' + res.status);
                 const json = await res.json();
                 const rows = Array.isArray(json.rows) ? json.rows : [];
-
-                if (rows.length) console.debug('[booking] sample row:', rows[0]);
-
                 rows.forEach(it => {
-                    let dateIso = (it.date || it.depart_date || it.start_date || '').toString().slice(0, 10);
-                    if (!dateIso) return;
-
-                    deps.add(dateIso);
-
-                    const dur = parseInt(it.duration_days ?? it.nights ?? it.duration ?? '', 10);
-                    if (!Number.isNaN(dur) && dur > 0) durMap.set(dateIso, dur);
-
-                    const iata = iataFromRow(it) || currentAptValue();
-                    if (iata) {
-                        const set = aptMap.get(dateIso) || new Set();
-                        set.add(iata);
-                        aptMap.set(dateIso, set);
-                    } else {
-                        // Log diagnostico: così vediamo perché manca l'aeroporto
-                        console.debug('[booking] no airport for date', dateIso, 'row=', it);
+                    if (it.date) {
+                        deps.add(it.date);
+                        const dur = parseInt(it.duration_days, 10);
+                        if (!Number.isNaN(dur) && dur > 0) durMap.set(it.date, dur);
                     }
                 });
-
-                console.debug('[booking] aptMap snapshot:', Array.from(aptMap.entries()).slice(0, 5));
                 initFlatpickr();
             } catch (e) {
                 console.error('[booking] departures exception', e);
@@ -363,16 +270,27 @@
                     alert('Please select a destination and a departure date.');
                     return;
                 }
-                showSpinner(true);
+                showSpinner(true); // shared spinner on search
             });
 
+            // hide spinner if user navigates back here from results
+            //window.addEventListener('pageshow', () => showSpinner(false));
+
+            // DOPO (patch bfcache):
             window.addEventListener('pageshow', (ev) => {
                 showSpinner(false);
+
+                // vero quando la pagina ritorna dalla history (back/forward)
                 const nav = performance.getEntriesByType?.('navigation')?.[0];
                 const fromBFCache = ev.persisted || (nav && nav.type === 'back_forward');
+
                 if (fromBFCache) {
+                    // ricrea il calendario e ricarica le date disponibili
                     initFlatpickr();
-                    if (selDest?.value) loadDepartures();
+                    if (selDest?.value) {
+                        loadDepartures();
+                    }
+                    // riallinea la data di rientro con le notti selezionate
                     if (startInput?.value && selNights?.value) {
                         endInput.value = addDays(startInput.value, selNights.value);
                     }
@@ -382,9 +300,138 @@
     })();
 </script>
 
+<script>
+    (() => {
+        // ====== PAX modal ======
+        const $ = (s, r = document) => r.querySelector(s);
+        const paxModalEl = $('#paxModal');
+        const roomsSel = $('#roomsSel');
+        const roomsCont = $('#roomsContainer');
+        const applyBtn = $('#applyPax');
+        const errBox = $('#paxError');
 
+        const roomsInput = $('#rooms');
+        const adultsInput = $('#adults');
+        const kidsAgesInput = $('#children_ages');
 
+        const roomCountLbl = $('#roomCount');
+        const adultCountLbl = $('#adultCount');
+        const childCountLbl = $('#childCount');
 
+        if (!paxModalEl || !roomsSel || !roomsCont || !applyBtn) return;
+
+        function updateChildAges(roomEl, n, preset = []) {
+            const cont = roomEl.querySelector('.child-ages');
+            cont.innerHTML = '';
+            if (!n) return;
+            for (let i = 0; i < n; i++) {
+                const sel = document.createElement('select');
+                sel.className = 'form-select form-select-sm child-age';
+                sel.style.minWidth = '70px';
+                sel.setAttribute('aria-label', `Child ${i + 1} age`);
+                sel.innerHTML = Array.from({ length: 18 }, (_, age) => `<option value="${age}">${age}</option>`).join('');
+                sel.value = (preset[i] ?? 6).toString();
+                cont.appendChild(sel);
+            }
+        }
+
+        function buildRoomBlock(idx, adults = 2, children = 0, ages = []) {
+            const wrap = document.createElement('div');
+            wrap.className = 'room-block border rounded p-2 mb-2';
+            wrap.dataset.room = String(idx);
+            wrap.innerHTML = `
+      <div class="row g-2 align-items-end">
+        <div class="col-12 col-md-4">
+          <label class="form-label mb-1">Adults</label>
+          <select class="form-select adult-sel" aria-label="Adults room ${idx + 1}">
+            ${Array.from({ length: 6 }, (_, i) => `<option value="${i + 1}" ${i + 1 === adults ? 'selected' : ''}>${i + 1}</option>`).join('')}
+          </select>
+        </div>
+        <div class="col-12 col-md-4">
+          <label class="form-label mb-1">Children</label>
+          <select class="form-select child-sel" aria-label="Children room ${idx + 1}">
+            ${Array.from({ length: 5 }, (_, i) => `<option value="${i}" ${i === children ? 'selected' : ''}>${i}</option>`).join('')}
+          </select>
+        </div>
+        <div class="col-12 col-md-4">
+          <label class="form-label mb-1">Children ages</label>
+          <div class="child-ages d-flex flex-wrap gap-1"></div>
+        </div>
+      </div>`;
+            updateChildAges(wrap, children, ages);
+            wrap.querySelector('.child-sel').addEventListener('change', (e) => {
+                const n = parseInt(e.target.value, 10) || 0;
+                updateChildAges(wrap, n);
+            });
+            return wrap;
+        }
+
+        function rebuildRooms(n) {
+            roomsCont.innerHTML = '';
+            for (let i = 0; i < n; i++) {
+                roomsCont.appendChild(buildRoomBlock(i, 2, 0, []));
+            }
+        }
+
+        function collectAndApply() {
+            const blocks = Array.from(document.querySelectorAll('#roomsContainer .room-block'));
+            const totals = { rooms: blocks.length, adults: 0, children: 0, ages: [] };
+            for (const b of blocks) {
+                const ad = parseInt(b.querySelector('.adult-sel').value, 10) || 0;
+                const ch = parseInt(b.querySelector('.child-sel').value, 10) || 0;
+                const ages = Array.from(b.querySelectorAll('.child-age')).map(x => parseInt(x.value, 10) || 0);
+                if (ages.length !== ch) {
+                    errBox.textContent = 'Please set the age for each child.';
+                    errBox.style.display = 'block';
+                    return false;
+                }
+                totals.adults += ad;
+                totals.children += ch;
+                totals.ages.push(...ages);
+            }
+            errBox.style.display = 'none';
+            roomsInput.value = String(totals.rooms);
+            adultsInput.value = String(totals.adults);
+            kidsAgesInput.value = totals.ages.join(',');
+
+            roomCountLbl.textContent = totals.rooms;
+            adultCountLbl.textContent = totals.adults;
+            childCountLbl.textContent = totals.children;
+            return true;
+        }
+
+        // Apply and close
+        document.getElementById('applyPax').addEventListener('click', (e) => {
+            e.preventDefault();
+            if (!collectAndApply()) return;
+            const trigger = document.getElementById('paxBtn');
+            if (trigger) trigger.focus({ preventScroll: true });
+            const modalEl = document.getElementById('paxModal');
+            const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
+            requestAnimationFrame(() => modal.hide());
+        });
+
+        paxModalEl.addEventListener('show.bs.modal', () => {
+            const r = Math.min(Math.max(parseInt(roomsInput.value, 10) || 1, 1), 3);
+            roomsSel.value = String(r);
+            rebuildRooms(r);
+            const savedAges = (kidsAgesInput.value || '')
+                .split(',').filter(Boolean).map(x => parseInt(x, 10))
+                .filter(x => !Number.isNaN(x));
+            if (savedAges.length) {
+                const first = roomsCont.querySelector('.room-block');
+                if (first) {
+                    first.querySelector('.child-sel').value = String(savedAges.length);
+                    updateChildAges(first, savedAges.length, savedAges);
+                }
+            }
+        });
+
+        roomsSel.addEventListener('change', () => {
+            rebuildRooms(parseInt(roomsSel.value, 10) || 1);
+        });
+    })();
+</script>
 
 <style>
     .flatpickr-calendar {

@@ -257,7 +257,44 @@
     {% endfor %}
     {% else %}
     <div class="alert alert-info">No availability for the selected criteria.</div>
+
+    {# Tracce tecniche per ogni chiamata (se passate dal controller in meta.debug_traces) #}
+    {% if meta.debug_traces and meta.debug_traces|length %}
+    <div class="mt-3">
+        <h5 class="h6 mb-2">Technical traces (requests & responses)</h5>
+
+        <div class="accordion" id="availDebugAccordion">
+            {% for t in meta.debug_traces %}
+            <div class="accordion-item">
+                <h2 class="accordion-header" id="dbgHead{{ loop.index }}">
+                    <button class="accordion-button collapsed" type="button"
+                            data-bs-toggle="collapse" data-bs-target="#dbgCol{{ loop.index }}"
+                            aria-expanded="false" aria-controls="dbgCol{{ loop.index }}">
+                        DEP {{ t.dep }} — {{ t.status or 'no status' }}{% if t.error %} — {{ t.error }}{% endif %}
+                    </button>
+                </h2>
+                <div id="dbgCol{{ loop.index }}" class="accordion-collapse collapse"
+                     aria-labelledby="dbgHead{{ loop.index }}" data-bs-parent="#availDebugAccordion">
+                    <div class="accordion-body">
+                        <div class="row g-3">
+                            <div class="col-12 col-lg-6">
+                                <h6 class="mb-2">XML Request</h6>
+                                <pre class="small bg-light p-2 rounded border m-0" style="white-space:pre-wrap">{{ t.request_xml|trim }}</pre>
+                            </div>
+                            <div class="col-12 col-lg-6">
+                                <h6 class="mb-2">XML Response</h6>
+                                <pre class="small bg-light p-2 rounded border m-0" style="white-space:pre-wrap">{{ t.response_xml|trim }}</pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
     {% endif %}
+    {% endif %}
+
 </div>
 
 <!-- Shared spinner overlay -->
