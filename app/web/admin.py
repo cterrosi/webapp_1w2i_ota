@@ -240,3 +240,25 @@ def clear_departures_cache():
         flash(f"Tabella departures_cache non trovata: nulla da cancellare. ({e.__class__.__name__})", "warning")
     return redirect(url_for("home.settings"))
 
+@bp.get("/prod_diag", endpoint="prod_diag")
+@login_required
+def prod_diag():
+    from sqlalchemy import text as _sql
+    info = {
+        "engine_url": str(db.engine.url),
+        "counts": {},
+        "sample_detail": [],
+        "error": None,
+    }
+    try:
+        info["counts"]["ota_product"] = db.session.execute(_sql("SELECT COUNT(*) FROM ota_product")).scalar_one()
+        info["counts"]["ota_product_detail"] = db.session.execute(_sql("SELECT COUNT(*) FROM ota_product_detail")).scalar_one()
+        info["counts"]["ota_product_media"] = db.session.execute(_sql("SELECT COUNT(*) FROM ota_product_media")).scalar_one()
+        info["sample_detail"] = [
+            dict(row) for row in db.session.execute(_sql(
+                "SELECT product_id, name, LENGTH(descriptions_json) AS dlen FROM ota_product_detail LIMIT 5"
+            ))
+        ]
+    except Exception as e:
+        info["error"] = str(e)
+    return jsonify(info), 200

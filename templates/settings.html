@@ -145,11 +145,11 @@
                                value="{{ request.args.get('limit')}}" placeholder="es. 10">
                     </div>
 
+                    {# Import completo: dettagli + immagini #}
+                    <input type="hidden" name="fill_details" value="1">
+                    <input type="hidden" name="maxcores" value="999">
+
                     <div class="col-auto d-flex align-items-center mt-4">
-                        <div class="form-check me-3">
-                            <input class="form-check-input" type="checkbox" id="only_missing" name="only_missing" value="1">
-                            <label class="form-check-label" for="only_missing">Only Missing</label>
-                        </div>
                         <div class="form-check">
                             <input class="form-check-input" type="checkbox" id="debug" name="debug" value="1">
                             <label class="form-check-label" for="debug">Debug</label>
@@ -158,7 +158,7 @@
 
                     <!-- RIGA BOTTONI: PRODUCT -->
                     <div id="prod-cta-row" class="col-12 cta-row mt-2">
-                        <button class="btn btn-warning btn-same" type="submit">Import</button>
+                        <button class="btn btn-warning btn-same" type="submit">Import completo</button>
                         <button class="btn btn-danger btn-same"
                                 type="submit" form="clearProductsForm"
                                 onclick="return confirm('Confermi di cancellare tutta la cache prodotti?');">
@@ -175,7 +175,7 @@
                     </div>
 
                     <div class="col-12">
-                        <small class="text-muted">Endpoint: <code>/products.ota_update_products</code></small>
+                        <small class="text-muted">Endpoint: <code>/products.ota_update_products?fill_details=1&maxcores=999</code></small>
                     </div>
                 </form>
                 <!-- form nascosto per Delete prodotti -->
@@ -235,7 +235,7 @@
 </div> <!-- /row -->
 <!-- JS -->
 <script>
-  // Helpers visibilità (niente style.display per evitare conflitti con !important di Bootstrap)
+  // Helpers visibilità
   function showFlex(el){ if(!el) return; el.classList.remove('d-none'); el.classList.add('d-flex'); }
   function hideEl(el){ if(!el) return; el.classList.remove('d-flex'); el.classList.add('d-none'); }
 
@@ -266,7 +266,7 @@
         const p = await r.json();
 
         if (p.running) {
-          showFlex(spin);                 // mostra spinner sotto la barra
+          showFlex(spin);
           if (btn) btn.disabled = true;
 
           const total = p.total || 0, done = p.done || 0;
@@ -282,7 +282,7 @@
           text.textContent = p.error ? 'Errore durante l’import.' : `Completato. Righe aggiornate: ${p.rows || 0}`;
           msg.textContent  = p.finished_at ? `Finito alle ${p.finished_at}` : '';
           setBar(p.done || 0, p.total || 0);
-          setTimeout(() => { hideEl(spin); }, 600);   // nascondi spinner
+          setTimeout(() => { hideEl(spin); }, 600);
         }
       } catch (e) {
         msg.textContent = `Progress network error: ${e}`;
@@ -314,21 +314,19 @@
 
   // --- Spinner & disable sui DELETE (prod + dep) ---
   (function () {
-    // prodotti
     const prodDelForm = document.getElementById('clearProductsForm');
     const prodRow     = document.getElementById('prod-cta-row');
     const prodSpin    = document.getElementById('prod-spinner');
     if (prodDelForm && prodRow && prodSpin) {
       prodDelForm.addEventListener('submit', function () {
         prodSpin.querySelector('span').textContent = 'Deleting…';
-        prodSpin.classList.remove('d-none'); // già ha d-flex
+        prodSpin.classList.remove('d-none');
         prodRow.querySelectorAll('button, a.btn').forEach(el => {
           el.classList.add('disabled'); el.setAttribute('aria-disabled', 'true');
         });
       });
     }
 
-    // partenze
     const depDelForm = document.getElementById('clearDeparturesForm');
     const depRow     = document.getElementById('dep-cta-row');
     const depSpin    = document.getElementById('dep-spinner');
@@ -344,7 +342,7 @@
     }
   })();
 
-  // --- Reset sicuro UI partenze su load / back-forward cache ---
+  // --- Reset UI partenze su load / back-forward cache ---
   (function () {
     const btn = document.getElementById('btn-start-dep');
     const spin = document.getElementById('dep-spinner');
@@ -376,14 +374,12 @@
 </script>
 
 <style>
-    /* Righe CTA: flex + allunga tutti gli item alla stessa altezza */
     .cta-row {
         display: flex;
         gap: .5rem;
         align-items: stretch;
     }
 
-    /* Bottoni normalizzati (funziona uguale su <a> e <button>) */
     .btn-same {
         display: flex;
         align-items: center;

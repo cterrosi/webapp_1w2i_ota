@@ -1,24 +1,30 @@
 from datetime import datetime
 from flask_login import UserMixin
 from werkzeug.security import generate_password_hash, check_password_hash
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.orm import relationship
 from .extensions import db
 
-# ----------------- MODELS (copiati dal tuo file) -----------------
+# =========================
+# MODELS
+# =========================
 
 class User(UserMixin, db.Model):
+    __tablename__ = "user"
+
     id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(80), unique=True, nullable=False)
+    username = db.Column(db.String(80), unique=True, nullable=False, index=True)
     password_hash = db.Column(db.String(255), nullable=False)
 
     def set_password(self, raw: str):
-        self.password_hash = generate_password_hash(raw, method='pbkdf2:sha256')
+        self.password_hash = generate_password_hash(raw, method="pbkdf2:sha256")
 
     def check_password(self, raw: str) -> bool:
         return check_password_hash(self.password_hash, raw)
 
 
 class SettingOTA(db.Model):
+    __tablename__ = "setting_ota"
+
     id = db.Column(db.Integer, primary_key=True)
 
     # endpoint/identità OTA
@@ -47,6 +53,8 @@ class SettingOTA(db.Model):
 
 
 class OTAProduct(db.Model):
+    __tablename__ = "ota_product"
+
     id = db.Column(db.Integer, primary_key=True)
     tour_activity_code = db.Column(db.String(120), index=True)
     tour_activity_name = db.Column(db.String(300))
@@ -60,11 +68,16 @@ class OTAProduct(db.Model):
     category_code = db.Column(db.String(20))
     category_detail = db.Column(db.String(120))
 
+    # relazioni
+    detail = relationship("OTAProductDetail", uselist=False, backref="product")
+    media  = relationship("OTAProductMedia", backref="product", cascade="all, delete-orphan")
+
 
 class OTAProductDetail(db.Model):
-    __tablename__ = "products.ota_product_detail"
+    __tablename__ = "ota_product_detail"
+
     id = db.Column(db.Integer, primary_key=True)
-    product_id = db.Column(db.Integer, db.ForeignKey('ota_product.id'), unique=True, index=True, nullable=False)
+    product_id = db.Column(db.Integer, db.ForeignKey("ota_product.id"), unique=True, index=True, nullable=False)
     name = db.Column(db.String(300), default="")
     duration = db.Column(db.String(120), default="")
     city = db.Column(db.String(50), default="")
@@ -75,22 +88,29 @@ class OTAProductDetail(db.Model):
     pickup_notes_json = db.Column(db.Text, default="[]")
     policies_json = db.Column(db.Text, default="[]")
     contacts_json = db.Column(db.Text, default="[]")
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
 
 class OTAProductMedia(db.Model):
     __tablename__ = "ota_product_media"
+
     id = db.Column(db.Integer, primary_key=True)
-    product_id = db.Column(db.Integer, db.ForeignKey('ota_product.id'), index=True, nullable=False)
+    product_id = db.Column(db.Integer, db.ForeignKey("ota_product.id"), index=True, nullable=False)
     url = db.Column(db.Text, nullable=False)
-    kind = db.Column(db.String(50), default="image")  # image / video / other
+    kind = db.Column(db.String(50), default="image")   # image / video / other
     caption = db.Column(db.String(300), default="")
     sort_order = db.Column(db.Integer, default=0)
 
-# ----------------- MIGRAZIONE IDMPOTENTE -----------------
+
+# =========================
+# MIGRAZIONE IDEMPOTENTE
+# =========================
 
 def ensure_setting_columns():
-    """Aggiunge le colonne nuove se mancanti (idempotente)."""
+    """
+    Aggiunge le colonne nuove su setting_ota se mancanti (idempotente).
+    Utile in SQLite per evitare migrazioni manuali.
+    """
     engine = db.engine
     with engine.begin() as conn:
         tables = {r[0] for r in conn.exec_driver_sql(
@@ -99,9 +119,7 @@ def ensure_setting_columns():
         if "setting_ota" not in tables:
             return
 
-        cols = {r[1] for r in conn.exec_driver_sql(
-            "PRAGMA table_info(setting_ota)"
-        ).fetchall()}
+        cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(setting_ota)").fetchall()}
 
         def add(coldef: str):
             conn.exec_driver_sql(f"ALTER TABLE setting_ota ADD COLUMN {coldef}")

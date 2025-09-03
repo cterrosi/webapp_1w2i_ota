@@ -9,15 +9,11 @@ from requests.auth import HTTPBasicAuth
 from ..extensions import db
 from ..models import OTAProduct, OTAProductDetail, OTAProductMedia
 from ..services.runtime import get_setting_safe
-from ..services.ota_endpoints import build_endpoint, build_descriptive_endpoint
-from ..services.ota_detail import merge_detail_with_row, is_meaningful_detail
+from ..services.ota_endpoints import build_endpoint
+from ..services.ota_detail import merge_detail_with_row  # usato nell'import
 from ..services import parse_products
 from ..services.ota_io import (
     build_ota_product_request,
-    build_ota_descriptive_by_code_request,
-    build_ota_product_request_by_code,
-    parse_ota_descriptive_detail,
-    product_dict_to_detail,
     build_availability_xml_from_product,
     parse_availability_xml,
 )
@@ -25,26 +21,115 @@ from ..settings import DEBUG_DIR
 
 bp = Blueprint("products", __name__)
 
-def _save_detail_only(product_id: int, detail: dict):
-    rec = db.session.query(OTAProductDetail).filter_by(product_id=product_id).one_or_none()
+# ---------- helpers di persistenza (dettagli e media separati) ----------
+
+def _save_detail_only(product_id: int, detail: dict | None, *, commit: bool = False):
+    """
+    Salva/aggiorna il dettaglio prodotto.
+    1) Prova via ORM (OTAProductDetail).
+    2) Verifica che la riga esista in 'ota_product_detail'.
+       Se NON c'è, fallback con raw SQL (includendo created_at/updated_at se NOT NULL).
+    """
+    if not detail:
+        return
+
     payload = dict(
         product_id=product_id,
         name=(detail.get("name") or "").strip(),
         duration=(detail.get("duration") or "").strip(),
         city=(detail.get("city") or "").strip(),
         country=(detail.get("country") or "").strip(),
-        categories_json=json.dumps(detail.get("categories") or []),
-        types_json=json.dumps(detail.get("types") or []),
-        descriptions_json=json.dumps(detail.get("descriptions") or []),
-        pickup_notes_json=json.dumps(detail.get("pickup_notes") or []),
+        categories_json=json.dumps(detail.get("categories") or [], ensure_ascii=False),
+        types_json=json.dumps(detail.get("types") or [], ensure_ascii=False),
+        descriptions_json=json.dumps(detail.get("descriptions") or [], ensure_ascii=False),
+        pickup_notes_json=json.dumps(detail.get("pickup_notes") or [], ensure_ascii=False),
     )
+
+    # --- 1) Tentativo ORM
+    rec = db.session.query(OTAProductDetail).filter_by(product_id=product_id).one_or_none()
     if rec:
-        for k, v in payload.items():
-            setattr(rec, k, v)
+        rec.name = payload["name"]
+        rec.duration = payload["duration"]
+        rec.city = payload["city"]
+        rec.country = payload["country"]
+        rec.categories_json = payload["categories_json"]
+        rec.types_json = payload["types_json"]
+        rec.descriptions_json = payload["descriptions_json"]
+        rec.pickup_notes_json = payload["pickup_notes_json"]
     else:
         db.session.add(OTAProductDetail(**payload))
-    db.session.commit()
 
+    db.session.flush()  # fa emergere subito eventuali errori ORM
+
+    # --- 2) Verifica presenza fisica
+    from sqlalchemy import text as _sql
+    try:
+        row_exists = bool(
+            db.session.execute(
+                _sql("SELECT 1 FROM ota_product_detail WHERE product_id = :pid LIMIT 1"),
+                {"pid": product_id}
+            ).fetchone()
+        )
+    except Exception as e:
+        print(f"[DETAIL][CHECK][ERR] {e}", flush=True)
+        row_exists = True  # non forzare fallback se la SELECT ha fallito
+
+    if not row_exists:
+        # Fallback con gestione timestamp (created_at/updated_at) se presenti e/o NOT NULL
+        try:
+            # ispeziona lo schema una sola volta per capire se ci sono le colonne
+            if not hasattr(_save_detail_only, "_detail_cols"):
+                cols = db.session.execute(_sql("PRAGMA table_info(ota_product_detail)")).fetchall()
+                _save_detail_only._detail_cols = {c[1]: {"notnull": bool(c[3])} for c in cols}  # name -> {notnull:0/1}
+            cols = getattr(_save_detail_only, "_detail_cols", {})
+
+            extra_cols = []
+            extra_vals = {}
+            # setta timestamp in formato ISO secondi (SQLite accetta TEXT)
+            from datetime import datetime, timezone
+            now_iso = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+            if "created_at" in cols:
+                extra_cols.append("created_at")
+                extra_vals["created_at"] = now_iso
+            if "updated_at" in cols:
+                extra_cols.append("updated_at")
+                extra_vals["updated_at"] = now_iso
+
+            db.session.execute(_sql("DELETE FROM ota_product_detail WHERE product_id = :pid"), {"pid": product_id})
+
+            columns = ["product_id", "name", "duration", "city", "country",
+                       "categories_json", "types_json", "descriptions_json", "pickup_notes_json"] + extra_cols
+            placeholders = ",".join([f":{k}" for k in columns])
+
+            db.session.execute(
+                _sql(f"INSERT INTO ota_product_detail ({', '.join(columns)}) VALUES ({placeholders})"),
+                {**payload, **extra_vals}
+            )
+            db.session.flush()
+            # print(f"[DETAIL][FALLBACK] inserted product_id={product_id}", flush=True)
+        except Exception as e:
+            print(f"[DETAIL][FALLBACK][ERR] product_id={product_id}: {e}", flush=True)
+
+    if commit:
+        db.session.commit()
+
+
+def _replace_media_only(product_id: int, image_urls):
+    db.session.query(OTAProductMedia).filter_by(product_id=product_id).delete()
+    for i, u in enumerate(image_urls or []):
+        if not u:
+            continue
+        db.session.add(OTAProductMedia(
+            product_id=product_id,
+            kind="image",
+            url=u,
+            sort_order=i
+        ))
+    # commit a blocchi nel chiamante
+
+
+# ---------- util varie ----------
 
 def _normalize_base_url(url: str) -> str:
     return (url or "").rstrip("/")
@@ -65,33 +150,8 @@ def _pretty_xml(xml_bytes: bytes) -> str:
         except Exception:
             return str(xml_bytes)
 
-def _save_detail_and_media(product_id: int, detail: dict):
-    # detail -> OTAProductDetail
-    db.session.query(OTAProductDetail).filter_by(product_id=product_id).delete()
-    db.session.add(OTAProductDetail(
-        product_id=product_id,
-        name=(detail.get("name") or "").strip(),
-        duration=(detail.get("duration") or "").strip(),
-        city=(detail.get("city") or "").strip(),
-        country=(detail.get("country") or "").strip(),
-        categories_json=json.dumps(detail.get("categories") or []),
-        types_json=json.dumps(detail.get("types") or []),
-        descriptions_json=json.dumps(detail.get("descriptions") or []),
-        pickup_notes_json=json.dumps(detail.get("pickup_notes") or []),
-    ))
-    # images -> OTAProductMedia
-    db.session.query(OTAProductMedia).filter_by(product_id=product_id).delete()
-    for i, u in enumerate(detail.get("image_urls") or []):
-        if not u:
-            continue
-        db.session.add(OTAProductMedia(
-            product_id=product_id,
-            kind="image",
-            url=u,
-            sort_order=i
-        ))
-    db.session.commit()
 
+# ----------------- AVAILABILITY (unchanged behavior) -----------------
 
 @bp.post("/<int:product_id>/availability", endpoint="ota_product_availability")
 @login_required
@@ -107,7 +167,7 @@ def ota_product_availability(product_id: int):
     tac = (row.tour_activity_code or "").strip()
 
     start_date = (request.form.get("start_date") or "").strip()
-    end_date   = (request.form.get("end_date")   or "").strip()   # <-- LO LEGGIAMO
+    end_date   = (request.form.get("end_date")   or "").strip()
     try:
         units = int(request.form.get("units", "2"))
     except Exception:
@@ -204,6 +264,7 @@ def ota_product_availability(product_id: int):
     )
 
 
+# ----------------- IMPORT PRODOTTI + DETTAGLI + MEDIA -----------------
 
 @bp.route("/ota_update_products", methods=["GET", "POST"], endpoint="ota_update_products")
 @login_required
@@ -226,16 +287,19 @@ def ota_update_products():
     except Exception:
         limit = 0
 
-    # EAGER defaults: attiva sempre immagini; dettagli opzionali (mettilo True se vuoi)
+    # EAGER defaults: attiva sempre immagini; dettagli ON di default (disattivabile via querystring)
     fill_images  = True
-    fill_details = False
+    fill_details = str(request.args.get("fill_details", "1")).lower() in ("1", "true", "yes", "on")
     # tetto predefinito alle DESCRIPTIVE per non sovraccaricare
     try:
-        maxcores = int(request.args.get("maxcores", "120") or 120)
+        maxcores = int(request.args.get("maxcores", "250") or 250)
     except Exception:
-        maxcores = 120
+        maxcores = 250
 
     # build request
+    from ..services.ota_endpoints import build_descriptive_endpoint  # import locale per evitare import inutilizzato sopra
+    from ..services.ota_io import build_ota_descriptive_by_code_request, parse_ota_descriptive_detail
+
     rq_xml = build_ota_product_request(s)
     url = build_endpoint(s.base_url)
     headers = {"Content-Type": "application/xml; charset=utf-8", "Accept": "application/xml"}
@@ -334,30 +398,38 @@ def ota_update_products():
                 rep_row = db.session.get(OTAProduct, product_ids[0])
                 merged = merge_detail_with_row(detail, rep_row)
 
-                # se stiamo solo cercando immagini e non ce ne sono, salta
+                # se non ci sono immagini logga, ma NON saltare (dobbiamo comunque salvare i dettagli)
                 if fill_images and not (merged.get("image_urls") or []):
                     print(f"[PRODUCTS][EAGER] core={core} no images", flush=True)
-                    if not fill_details:
-                        continue
 
+                # persist per tutti i product_id del core
+                batch_counter = 0
                 for pid in product_ids:
-                    to_save = dict(merged)
-                    if not fill_details:
-                        to_save.update({
-                            "name": "", "duration": "", "city": "", "country": "",
-                            "categories": [], "types": [], "descriptions": [], "pickup_notes": [],
-                        })
-                    if not fill_images:
-                        to_save["image_urls"] = []
 
-                    _save_detail_and_media(pid, to_save)
                     if fill_details:
+                        _save_detail_only(pid, {
+                            "name":         merged.get("name") or "",
+                            "duration":     merged.get("duration") or "",
+                            "city":         merged.get("city") or "",
+                            "country":      merged.get("country") or "",
+                            "categories":   merged.get("categories") or [],
+                            "types":        merged.get("types") or [],
+                            "descriptions": merged.get("descriptions") or [],
+                            "pickup_notes": merged.get("pickup_notes") or [],
+                        }, commit=False)
                         created_detail += 1
-                    if fill_images:
-                        created_media += len(to_save.get("image_urls") or [])
 
-                if (idx % 25) == 0:
-                    db.session.commit()
+                        if fill_images:
+                            _replace_media_only(pid, merged.get("image_urls") or [])
+                            if merged.get("image_urls"):
+                                created_media += len(merged.get("image_urls") or [])
+
+                        # forza la generazione SQL ora (utile per beccare errori FK o schema)
+                        db.session.flush()
+
+                        batch_counter += 1
+                        if (batch_counter % 50) == 0:
+                            db.session.commit()
 
             except Exception as e:
                 print(f"[PRODUCTS][EAGER] core={core} error: {e}", flush=True)
@@ -365,40 +437,24 @@ def ota_update_products():
         db.session.commit()
         print(f"[PRODUCTS][EAGER] done: details={created_detail}, media_rows={created_media}", flush=True)
 
+    # --- VERIFICA POST-IMPORT (debug) ---
+    try:
+        cnt_det = db.session.query(OTAProductDetail).count()
+        cnt_med = db.session.query(OTAProductMedia).count()
+        print(f"[PRODUCTS][VERIFY] ota_product_detail rows = {cnt_det}, ota_product_media rows = {cnt_med}", flush=True)
+
+        sample = db.session.execute(
+            "SELECT product_id, name, LENGTH(descriptions_json) AS dlen FROM ota_product_detail LIMIT 3"
+        ).fetchall()
+        print(f"[PRODUCTS][VERIFY] sample detail rows: {sample}", flush=True)
+    except Exception as e:
+        print(f"[PRODUCTS][VERIFY][ERR] {e}", flush=True)
+
+
     return redirect(url_for("products.ota_products"))
 
 
-
-# --- helper: persiste DETAIL + MEDIA per un prodotto ---------------------------------
-def _save_detail_and_media(product_id: int, detail: dict):
-    """Persisti OTAProductDetail e OTAProductMedia per il product_id."""
-    # dettaglio
-    db.session.query(OTAProductDetail).filter_by(product_id=product_id).delete()
-    db.session.add(OTAProductDetail(
-        product_id=product_id,
-        name=(detail.get("name") or "").strip(),
-        duration=(detail.get("duration") or "").strip(),
-        city=(detail.get("city") or "").strip(),
-        country=(detail.get("country") or "").strip(),
-        categories_json=json.dumps(detail.get("categories") or []),
-        types_json=json.dumps(detail.get("types") or []),
-        descriptions_json=json.dumps(detail.get("descriptions") or []),
-        pickup_notes_json=json.dumps(detail.get("pickup_notes") or []),
-    ))
-    # media
-    db.session.query(OTAProductMedia).filter_by(product_id=product_id).delete()
-    for i, u in enumerate(detail.get("image_urls") or []):
-        if not u:
-            continue
-        db.session.add(OTAProductMedia(
-            product_id=product_id,
-            kind="image",
-            url=u,
-            sort_order=i
-        ))
-    db.session.commit()
-# -------------------------------------------------------------------------------------
-
+# ----------------- LISTA PRODOTTI (unchanged) -----------------
 
 @bp.route("/ota_products", methods=["GET"], endpoint="ota_products")
 @login_required
@@ -443,8 +499,6 @@ def ota_products():
             "image": first_img.get(p.id),
         })
 
-    # groups è un dict: { core -> { "core":..., "name":..., "items":[...] } }
-
     groups_list = sorted(groups.values(), key=lambda x: (x.get("name") or x.get("core") or ""))
 
     total_groups = len(groups_list)
@@ -452,10 +506,13 @@ def ota_products():
 
     return render_template(
         "products/ota_products_grouped.html",
-        groups=groups_list,          # <--- passa la LISTA al template
+        groups=groups_list,
         total_groups=total_groups,
         total_items=total_items,
-)
+    )
+
+
+# ----------------- DETTAGLIO PRODOTTO (solo da cache, niente fetch) -----------------
 
 @bp.route("/ota_products/<int:product_id>", methods=["GET"], endpoint="ota_product_detail")
 @login_required
@@ -464,58 +521,15 @@ def ota_product_detail(product_id: int):
     if not row:
         return "Prodotto non trovato", 404
 
-    s = get_setting_safe()
-
-    # Headers + Auth (Bearer o Basic)
-    headers = {"Content-Type": "application/xml; charset=utf-8", "Accept": "application/xml"}
-    auth = None
-    if getattr(s, "bearer_token", None):
-        headers["Authorization"] = f"Bearer {s.bearer_token}"
-    elif getattr(s, "basic_user", None) and getattr(s, "basic_pass", None):
-        auth = HTTPBasicAuth(s.basic_user, s.basic_pass)
-
-    debug_mode = request.args.get("debug") == "1"
-    debug_dir = DEBUG_DIR if debug_mode else None
-
-    def _save_dbg(code: str, label: str, resp):
-        if not debug_mode:
-            return
-        try:
-            safe = (code or "UNK").replace(os.sep, "_").replace("#", "_")
-            pth = os.path.join(debug_dir, f"{safe}_{label}.xml")
-            with open(pth, "wb") as f:
-                f.write(resp.content or b"")
-            print(f"[DBG] {label} status: {resp.status_code} saved: {pth}", flush=True)
-        except Exception as e:
-            print(f"[DBG] save error ({label}):", e, flush=True)
-
-    # Se ho già cache e non chiedo refresh, uso quella (riempio immagini se mancano)
+    # prendo SOLO dalla cache (niente chiamate live)
     rec = OTAProductDetail.query.filter_by(product_id=product_id).first()
-    if rec and request.args.get("refresh") != "1":
+    image_urls = [m.url for m in OTAProductMedia.query
+                  .filter_by(product_id=product_id)
+                  .order_by(OTAProductMedia.sort_order.asc()).all()]
+
+    if rec:
         descs_raw = json.loads(rec.descriptions_json or "[]")
         descriptions = [Markup(html.unescape(x or "")) for x in descs_raw]
-        image_urls = [m.url for m in OTAProductMedia.query
-                      .filter_by(product_id=product_id)
-                      .order_by(OTAProductMedia.sort_order.asc()).all()]
-        if not image_urls:
-            codes_to_try = [row.tour_activity_code]
-            if "#" in (row.tour_activity_code or ""):
-                codes_to_try.append(row.tour_activity_code.split("#", 1)[0])
-            for code_try in codes_to_try:
-                try:
-                    rq_xml_d = build_ota_descriptive_by_code_request(s, code_try)
-                    url_d = build_descriptive_endpoint(s.base_url)
-                    print("DETAIL POST URL (DESCRIPTIVE IMG-FILL):", url_d, "code:", code_try, flush=True)
-                    resp_d = requests.post(url_d, data=rq_xml_d, headers=headers, auth=auth, timeout=60)
-                    _save_dbg(code_try, "DESCR_IMG", resp_d)
-                    if resp_d.status_code == 200:
-                        detail_tmp = parse_ota_descriptive_detail(resp_d.content)
-                        if detail_tmp.get("image_urls"):
-                            image_urls = detail_tmp["image_urls"]
-                            break
-                except Exception as e:
-                    print("[detail] DESCR IMG-FILL error:", code_try, e, flush=True)
-
         detail = {
             "name": rec.name,
             "duration": rec.duration,
@@ -527,77 +541,21 @@ def ota_product_detail(product_id: int):
             "pickup_notes": json.loads(rec.pickup_notes_json or "[]"),
             "image_urls": image_urls,
         }
-        # 👉 URL calcolato QUI (niente url_for nei servizi)
-        detail["quote_url"] = url_for("availability.availability_quote", product_id=product_id)
-        return render_template("products/ota_product_detail.html", p=row, detail=detail)
+    else:
+        # nessun dettaglio: fornisco struttura minimale per il template
+        detail = {
+            "name": row.tour_activity_name or "",
+            "duration": "",
+            "city": row.city_code or "",
+            "country": f"{row.country_iso or ''} {row.country_name or ''}".strip(),
+            "categories": [],
+            "types": [],
+            "descriptions": [],
+            "pickup_notes": [],
+            "image_urls": image_urls,
+        }
 
-    # --- Provo DESCRIPTIVE con TAC intero e "core" (senza #) ---
-    codes_to_try = [row.tour_activity_code]
-    if "#" in (row.tour_activity_code or ""):
-        codes_to_try.append(row.tour_activity_code.split("#", 1)[0])
+    # link preventivi (se i template lo usano)
+    detail["quote_url"] = url_for("availability.availability_quote", product_id=product_id)
 
-    for code_try in codes_to_try:
-        try:
-            rq_xml_d = build_ota_descriptive_by_code_request(s, code_try)
-            url_d = build_descriptive_endpoint(s.base_url)
-            print("DETAIL POST URL (DESCRIPTIVE):", url_d, "code:", code_try, flush=True)
-            resp_d = requests.post(url_d, data=rq_xml_d, headers=headers, auth=auth, timeout=60)
-            _save_dbg(code_try, "DESCR", resp_d)
-
-            if resp_d.status_code == 200:
-                detail = parse_ota_descriptive_detail(resp_d.content)
-                if is_meaningful_detail(detail):
-                    detail = merge_detail_with_row(detail, row)
-                    detail["descriptions"] = [Markup(html.unescape(x or "")) for x in detail.get("descriptions", [])]
-                    # 👉 URL calcolato QUI
-                    detail["quote_url"] = url_for("availability.availability_quote", product_id=product_id)
-                    return render_template("products/ota_product_detail.html", p=row, detail=detail)
-        except Exception as e:
-            print("[detail] DESCRIPTIVE call error:", code_try, e, flush=True)
-
-    # --- PRODUCT FALLBACK: con e senza city_code ---
-    try:
-        def _product_call_with_code(code_try: str, no_city: bool = False):
-            if no_city and getattr(s, "city_code", None):
-                old_city = s.city_code
-                try:
-                    s.city_code = ""  # disabilita temporaneamente il filtro città
-                    rq_xml_p = build_ota_product_request_by_code(s, code_try)
-                finally:
-                    s.city_code = old_city
-            else:
-                rq_xml_p = build_ota_product_request_by_code(s, code_try)
-
-            url_p = build_endpoint(s.base_url)
-            print("DETAIL POST URL (PRODUCT-FALLBACK):", url_p, "code:", code_try, "no_city:", no_city, flush=True)
-            resp_p = requests.post(url_p, data=rq_xml_p, headers=headers, auth=auth, timeout=60)
-            _save_dbg(code_try, "PROD_NOCITY" if no_city else "PROD", resp_p)
-
-            if resp_p.status_code == 200:
-                prods = parse_ota_products(resp_p.content)
-                if prods:
-                    d = product_dict_to_detail(prods[0])
-                    d = merge_detail_with_row(d, row)
-                    # 👉 URL calcolato QUI
-                    d["quote_url"] = url_for("availability.availability_quote", product_id=product_id)
-                    return d
-            return None
-
-        # 1) con city_code
-        for code_try in codes_to_try:
-            d = _product_call_with_code(code_try, no_city=False)
-            if d:
-                return render_template("products/ota_product_detail.html", p=row, detail=d)
-
-        # 2) senza city_code
-        for code_try in codes_to_try:
-            d = _product_call_with_code(code_try, no_city=True)
-            if d:
-                return render_template("products/ota_product_detail.html", p=row, detail=d)
-
-    except Exception as e:
-        print("[detail] PRODUCT fallback call error:", e, flush=True)
-
-    return "Product details not available (empty descriptive calls).", 502
-
-
+    return render_template("products/ota_product_detail.html", p=row, detail=detail)

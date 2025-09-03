@@ -1200,6 +1200,10 @@ def product_detail():
     from decimal import Decimal, InvalidOperation
     from lxml import etree as ET
     from flask import abort, current_app, request, render_template
+    from markupsafe import Markup
+    from app.extensions import db
+    from app.models import OTAProduct, OTAProductDetail, OTAProductMedia
+    from datetime import date
 
     OTA_NS = "http://www.opentravel.org/OTA/2003/05"
     ns = {"ota": OTA_NS}
@@ -1225,7 +1229,7 @@ def product_detail():
             except Exception:
                 pass
 
-    # immagine di fallback passata dal form
+    # immagine fallback dal form
     image_from_form = (request.form.get("image") or "").strip() or None
 
     if not package_code or not start_date or not end_date:
@@ -1248,10 +1252,46 @@ def product_detail():
     pp_price       = (request.form.get("pp_price") or "").strip() or None
     pp_currency    = (request.form.get("currency") or "").strip() or None
 
+    # --- voli selezionati: parse + normalizzazione robusta ---
     try:
-        flights_selected = json.loads(request.form.get("flights_json") or "[]")
+        flights_selected_raw = json.loads(request.form.get("flights_json") or "[]")
     except Exception:
-        flights_selected = []
+        flights_selected_raw = []
+
+    def _norm_dir(val: str) -> str:
+        s = str(val or "").strip().upper()
+        if s in ("1", "01", "OUT", "OUTBOUND", "A", "ANDATA"):
+            return "1"
+        if s in ("2", "02", "IN", "INBOUND", "R", "RITORNO"):
+            return "2"
+        return "1"
+
+    def _norm_airport(d):
+        if not isinstance(d, dict):
+            return {"airport": None, "datetime": None}
+        return {
+            "airport": d.get("airport") or d.get("airport_code") or d.get("iata") or d.get("code"),
+            "datetime": d.get("datetime") or d.get("dateTime") or d.get("iso") or d.get("time"),
+        }
+
+    norm_flights = []
+    for f in (flights_selected_raw or []):
+        if not isinstance(f, dict):
+            continue
+        od = _norm_dir(f.get("od_rph") or f.get("odRph") or f.get("direction"))
+        dep = _norm_airport(f.get("departure") or {})
+        arr = _norm_airport(f.get("arrival") or {})
+        norm_flights.append({
+            "od_rph": od,
+            "departure": dep,
+            "arrival": arr,
+            "flight_number": f.get("flight_number") or f.get("number") or f.get("flt") or "",
+            "baggage": f.get("baggage") or {},
+            "flight": f.get("flight") if isinstance(f.get("flight"), dict) else None,
+            "booking_class": (f.get("flight") or {}).get("booking_class") if isinstance(f.get("flight"), dict) else f.get("booking_class"),
+        })
+    out_legs = [x for x in norm_flights if x["od_rph"] == "1"]
+    in_legs  = [x for x in norm_flights if x["od_rph"] == "2"]
 
     # -------- helpers --------
     def _avail_url(base: str) -> str:
@@ -1274,19 +1314,15 @@ def product_detail():
                 return str(b)
 
     def _to_dec(x):
-        """Decimal robusto su stringhe tipo '2,048.00' o '2048.00'."""
+        """Decimal robusto su '2,048.00' o '2048,00' ecc."""
         if x is None:
             raise InvalidOperation
         s = str(x).strip().replace(" ", "")
-        # Se ci sono sia '.' che ',', prova a rimuovere i separatori migliaia più comuni
         if s.count(",") > 0 and s.count(".") > 0:
-            # ipotesi: '.' migliaia, ',' decimale  ->  '2,048.00' non comune in EU, gestiamo entrambi i versi:
-            # proviamo prima lo stile EU: '.' migliaia, ',' decimale
             try:
                 return Decimal(s.replace(".", "").replace(",", "."))
             except InvalidOperation:
                 pass
-        # stile US/EU semplice
         try:
             return Decimal(s.replace(",", ""))
         except InvalidOperation:
@@ -1344,11 +1380,11 @@ def product_detail():
         product_name = None
         room_options = []
 
-        # mappa rateplan: code -> {"name":..., "meal":...}
+        # mappa rateplan
         def _rateplan_map(activity_el):
             m = {}
             for rp in activity_el.findall("ota:RatePlans/ota:RatePlan", namespaces=ns):
-                rpc = (rp.get("RatePlanCode") or "").strip()     # es. "SS-FB"
+                rpc = (rp.get("RatePlanCode") or "").strip()
                 rpn = (rp.get("RatePlanName") or "") or None
                 meal = None
                 mi = rp.find("ota:MealsIncluded", namespaces=ns)
@@ -1359,11 +1395,10 @@ def product_detail():
             return m
 
         def _resolve_plan_info(rp_map, rate_plan_code):
-            """Accetta 'SS-FB' o 'DBLR|SS-FB' e ritorna dict con name/meal + short code."""
             full = (rate_plan_code or "").strip()
             short = full.split("|")[-1] if full else ""
             info = rp_map.get(full) or rp_map.get(short) or {"name": None, "meal": None}
-            info = dict(info)  # copy
+            info = dict(info)
             info["short"] = short
             info["full"] = full
             return info
@@ -1374,7 +1409,7 @@ def product_detail():
             if not product_name and bpi is not None:
                 product_name = bpi.get("TourActivityName") or product_core
 
-            # descrizione camera per codice (ActivityTypeCode -> Text)
+            # ActivityTypeCode -> descrizione
             service_map = {}
             for at in act.findall("ota:ActivityTypes/ota:ActivityType", namespaces=ns):
                 code = (at.get("ActivityTypeCode") or "").strip()
@@ -1386,26 +1421,22 @@ def product_detail():
             rp_map = _rateplan_map(act)
 
             for ar in act.findall("ota:ActivityRates/ota:ActivityRate", namespaces=ns):
-                # prezzo, currency
                 def _extract_price_and_curr(ar_el):
                     tot = ar_el.find("ota:Total", namespaces=ns)
                     if tot is not None and (tot.get("AmountAfterTax") or tot.get("AmountBeforeTax")):
                         return (tot.get("AmountAfterTax") or tot.get("AmountBeforeTax")), (tot.get("CurrencyCode") or None)
-                    # fallback: Rates/Rate/Base
                     base = ar_el.find("ota:Rates/ota:Rate/ota:Base", namespaces=ns)
                     if base is not None and (base.get("AmountAfterTax") or base.get("AmountBeforeTax")):
                         return (base.get("AmountAfterTax") or base.get("AmountBeforeTax")), (base.get("CurrencyCode") or None)
                     return None, None
 
                 price_str, curr = _extract_price_and_curr(ar)
-
-                # pricing type (se presente in Rates/Rate)
                 rate = ar.find("ota:Rates/ota:Rate", namespaces=ns)
                 pricing_type = (rate.get("PricingType") or None) if rate is not None else None
 
-                rcode = (ar.get("ActivityTypeCode") or "").strip()      # es. DBLR
+                rcode = (ar.get("ActivityTypeCode") or "").strip()
                 rname = service_map.get(rcode)
-                rp_code_full = (ar.get("RatePlanCode") or "").strip()   # es. DBLR|SS-FB (o solo SS-FB)
+                rp_code_full = (ar.get("RatePlanCode") or "").strip()
                 plan = _resolve_plan_info(rp_map, rp_code_full)
                 rp_name = plan.get("name")
                 meal_codes = plan.get("meal")
@@ -1417,11 +1448,11 @@ def product_detail():
                 room_options.append({
                     "room_code": rcode,
                     "room_name": rname,
-                    "rate_plan_code": rp_full,       # completo del BE
-                    "rate_plan_short": rp_short,     # SS-FB, SS-HB, ...
-                    "rate_plan_name": rp_name,       # es. "MEZZA PENSIONE ..."
+                    "rate_plan_code": rp_full,
+                    "rate_plan_short": rp_short,
+                    "rate_plan_name": rp_name,
                     "meal_plan_codes": meal_codes,
-                    "pricing_type": pricing_type,    # es. "Per stay"
+                    "pricing_type": pricing_type,
                     "booking_code": bcode,
                     "total_price": price_str,
                     "currency": curr,
@@ -1430,9 +1461,7 @@ def product_detail():
         if not product_name:
             product_name = product_core or package_code
 
-        # ---- DE-DUP sicura ----
-        # 1) Se c'è BookingCode, è la chiave primaria (serve per distinguere FB/HB).
-        # 2) Se manca, usa (room_code, rp_short, rate_plan_code) per non fondere trattamenti diversi.
+        # de-dup
         dedup = {}
         for r in room_options:
             key = r.get("booking_code") or (f"{r.get('room_code','')}|{r.get('rate_plan_short','')}|{r.get('rate_plan_code','')}")
@@ -1443,12 +1472,11 @@ def product_detail():
         room_options = list(dedup.values())
         room_options.sort(key=lambda x: (_to_dec(x.get("total_price")), x.get("room_code") or "", x.get("rate_plan_short") or ""))
 
-        # default: prima DBL* se esiste
         default_room_code = next((ro["room_code"] for ro in room_options if (ro.get("room_code") or "").startswith("DBL")), None)
         if not default_room_code and room_options:
             default_room_code = room_options[0].get("room_code")
 
-        # -------- GALLERY: DescriptiveInfo (con immagini) + fallback core --------
+        # -------- GALLERY --------
         def _fetch_gallery(tac: str):
             E = ET.Element
             rq = E("{%s}OTAX_TourActivityDescriptiveInfoRQ" % OTA_NS,
@@ -1488,7 +1516,12 @@ def product_detail():
     except Exception as ex:
         abort(502, description=f"Errore nel parsing dettaglio: {ex}")
 
-    # ====== render ======
+    # ---- meta per template (con nights e destina opzionale) ----
+    try:
+        nights = max((date.fromisoformat(end_date) - date.fromisoformat(start_date)).days, 0)
+    except Exception:
+        nights = 0
+
     meta = {
         "request": {
             "package_code": package_code,
@@ -1498,6 +1531,8 @@ def product_detail():
             "aptfrom": aptfrom,
             "adults": adults,
             "children_ages": children_ages,
+            "nights": nights,
+            "destina": request.form.get("destina") or request.form.get("destination") or "",
         }
     }
 
@@ -1505,6 +1540,64 @@ def product_detail():
     room_options = room_options or []
     default_room_code = default_room_code or (room_options[0]["room_code"] if room_options else None)
     gallery = gallery or ([image_from_form] if image_from_form else [])
+
+    # ---- carica dettaglio da DB per questo core ----
+    core = (product_core or (package_code.split('#', 1)[0] if '#' in package_code else package_code)).strip()
+    rep = db.session.query(OTAProduct).filter(OTAProduct.tour_activity_code.like(f"{core}%")).first()
+
+    if rep:
+        rec = db.session.query(OTAProductDetail).filter_by(product_id=rep.id).first()
+        media_rows = (db.session.query(OTAProductMedia)
+                      .filter_by(product_id=rep.id)
+                      .order_by(OTAProductMedia.sort_order.asc(), OTAProductMedia.id.asc())
+                      .all())
+        image_urls_db = [m.url for m in media_rows if (m.kind or "image") == "image"]
+        if (not gallery) and image_urls_db:
+            gallery = image_urls_db
+
+        def _loads(s):
+            try:
+                return json.loads(s) if s else []
+            except Exception:
+                return []
+
+        if rec:
+            descriptions = [Markup(x or "") for x in _loads(rec.descriptions_json)]
+            detail = {
+                "name":         rec.name or "",
+                "duration":     rec.duration or "",
+                "city":         rec.city or "",
+                "country":      rec.country or "",
+                "categories":   _loads(rec.categories_json),
+                "types":        _loads(rec.types_json),
+                "descriptions": descriptions,
+                "pickup_notes": _loads(rec.pickup_notes_json),
+                "image_urls":   image_urls_db,
+            }
+        else:
+            detail = {
+                "name":         product_name or core,
+                "duration":     "",
+                "city":         rep.city_code or "",
+                "country":      f"{rep.country_iso or ''} {rep.country_name or ''}".strip(),
+                "categories":   [],
+                "types":        [],
+                "descriptions": [],
+                "pickup_notes": [],
+                "image_urls":   image_urls_db,
+            }
+    else:
+        detail = {
+            "name":         product_name or core,
+            "duration":     "",
+            "city":         "",
+            "country":      "",
+            "categories":   [],
+            "types":        [],
+            "descriptions": [],
+            "pickup_notes": [],
+            "image_urls":   [],
+        }
 
     return render_template(
         "availability/product_detail.html",
@@ -1514,14 +1607,17 @@ def product_detail():
         room_options=room_options,
         default_room_code=default_room_code,
         meta=meta,
-        flights_selected=flights_selected,
+        flights_selected=norm_flights,   # <— normalizzati
+        out_legs=out_legs,               # <— PRONTI per il template
+        in_legs=in_legs,                 # <— PRONTI per il template
         flight_vettore=flight_vettore,
         pp_price=pp_price,
         pp_currency=pp_currency,
-        # ↓ per accordion debug a fondo pagina
         request_xml=request_xml_pretty,
         response_xml=response_xml_pretty,
+        detail=detail,
     )
+
 
 
 def pick_departure_airports(dest_code: str, aptfrom: str | None, start_date: str, nights: int) -> list[str]:

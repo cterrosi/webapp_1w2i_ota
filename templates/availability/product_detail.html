@@ -48,16 +48,66 @@
     </div>
     {% endif %}
 
+    {# --- DETTAGLI PRODOTTO (da DB) --- #}
+    {% if detail %}
+    <div class="card shadow-sm mb-3">
+        <div class="card-body">
+            <h5 class="mb-2">{{ detail.name or product_name }}</h5>
+
+            <div class="small text-muted mb-2">
+                {% if detail.duration %}<span class="me-2">⏱ {{ detail.duration }}</span>{% endif %}
+                {% if detail.city %}<span class="me-2">📍 {{ detail.city }}</span>{% endif %}
+                {% if detail.country %}<span class="me-2">🌎 {{ detail.country }}</span>{% endif %}
+            </div>
+
+            {% if detail.categories and detail.categories|length %}
+            <div class="mb-2">
+                {% for c in detail.categories %}
+                <span class="badge text-bg-light me-1 mb-1">{{ c }}</span>
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            {% if detail.types and detail.types|length %}
+            <div class="mb-2">
+                {% for t in detail.types %}
+                <span class="badge text-bg-secondary me-1 mb-1">{{ t }}</span>
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            {% if detail.descriptions and detail.descriptions|length %}
+            <div class="mt-2">
+                {% for html in detail.descriptions %}
+                <div class="mb-2">{{ html }}</div>
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            {% if detail.pickup_notes and detail.pickup_notes|length %}
+            <div class="mt-2">
+                <div class="fw-semibold mb-1">Pickup / Notes</div>
+                <ul class="small mb-0">
+                    {% for n in detail.pickup_notes %}
+                    <li>{{ n }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+    {% endif %}
+
     {# --- VOLI SELEZIONATI --- #}
-    {% set out_legs = flights_selected | selectattr('od_rph','equalto','1') | list %}
-    {% set in_legs  = flights_selected | selectattr('od_rph','equalto','2') | list %}
     {% if flights_selected and (out_legs|length or in_legs|length) %}
     <div class="card shadow-sm mb-3">
         <div class="card-body">
             <div class="d-flex justify-content-between flex-wrap gap-2">
                 <h5 class="mb-0">Selected flight</h5>
                 <div class="text-end small">
-                    {% if flight_vettore %}<div class="mb-1"><span class="badge text-bg-info">{{ flight_vettore }}</span></div>{% endif %}
+                    {% if flight_vettore %}
+                    <div class="mb-1"><span class="badge text-bg-info">{{ flight_vettore }}</span></div>
+                    {% endif %}
                     {% if pp_price and pp_currency %}
                     <div class="fw-semibold">{{ pp_price }} {{ pp_currency }} <span class="text-muted">per person</span></div>
                     {% endif %}
@@ -121,23 +171,20 @@
     </div>
     {% endif %}
 
-    {# SCELTA CAMERA #}
+    {# --- SCELTA CAMERA --- #}
     <div class="card shadow-sm">
         <div class="card-body">
             <h5 class="mb-3">Choose your room</h5>
 
             {% if room_options and room_options|length %}
-
-            {# ordina per prezzo crescente così, in caso di doppioni, vince il più economico #}
             {% set sorted_rooms = room_options|sort(attribute='total_price') %}
-            {# set per deduplicare per booking_code #}
             {% set seen = {} %}
 
             <form id="quoteForm" method="post" action="{{ url_for('quote.create') }}">
                 <!-- contesto ricerca -->
                 <input type="hidden" name="start_date" value="{{ meta.request.start_date }}">
                 <input type="hidden" name="end_date" value="{{ meta.request.end_date }}">
-                <input type="hidden" name="nights" value="{{ nights }}">
+                <input type="hidden" name="nights" value="{{ meta.request.nights }}">
                 <input type="hidden" name="rooms" value="{{ meta.request.rooms }}">
                 <input type="hidden" name="adults" value="{{ meta.request.adults }}">
                 {% if meta.request.children_ages and meta.request.children_ages|length %}
@@ -149,17 +196,12 @@
                     {% for r in sorted_rooms %}
                     {% set code = r.booking_code %}
                     {% if not seen.get(code) %}
-                    {# marca come visto: evita doppioni con stesso booking_code #}
                     {% set _ = seen.update({code: 1}) %}
-
                     <label class="list-group-item py-3">
                         <div class="d-flex justify-content-between gap-3">
                             <div class="d-flex gap-3">
-                                <input class="form-check-input mt-1"
-                                       type="radio"
-                                       name="booking_code"
-                                       id="rb_{{ loop.index }}"
-                                       value="{{ r.booking_code }}"
+                                <input class="form-check-input mt-1" type="radio" name="booking_code"
+                                       id="rb_{{ loop.index }}" value="{{ r.booking_code }}"
                                        {% if loop.first or (r.room_code==(default_room_code|default(''))) %}checked{% endif %}>
 
                                 <div>
@@ -170,11 +212,9 @@
                                         {% endif %}
                                     </div>
 
-                                    {# mostra SEMPRE il trattamento/rateplan #}
                                     {% if r.rate_plan_name or r.meal_plan_codes %}
                                     <div class="small">
-                                        Meal plan:
-                                        <span class="fw-semibold">{{ r.rate_plan_name or r.meal_plan_codes }}</span>
+                                        Meal plan: <span class="fw-semibold">{{ r.rate_plan_name or r.meal_plan_codes }}</span>
                                     </div>
                                     {% endif %}
 
@@ -183,41 +223,28 @@
                                     {% endif %}
 
                                     <div class="mt-2 d-flex flex-wrap gap-2 small">
-                                        {# refundable / non-refundable #}
                                         {% if r.non_refundable is not none %}
                                         <span class="badge text-bg-{{ 'danger' if r.non_refundable else 'success' }}">
                                             {{ 'Non-refundable' if r.non_refundable else 'Refundable' }}
                                         </span>
                                         {% endif %}
-
-                                        {# policy di cancellazione (se presente) #}
                                         {% if r.cxl and r.cxl.deadline and (r.cxl.deadline.multiplier or r.cxl.deadline.unit) %}
-                                        <span class="badge text-bg-secondary">
-                                            CXL: {{ r.cxl.deadline.multiplier }} {{ r.cxl.deadline.unit }}
-                                        </span>
+                                        <span class="badge text-bg-secondary">CXL: {{ r.cxl.deadline.multiplier }} {{ r.cxl.deadline.unit }}</span>
                                         {% endif %}
                                         {% if r.cxl and r.cxl.penalty and (r.cxl.penalty.percent or r.cxl.penalty.basis) %}
-                                        <span class="badge text-bg-secondary">
-                                            Penalty: {{ r.cxl.penalty.percent }}% {{ r.cxl.penalty.basis }}
-                                        </span>
+                                        <span class="badge text-bg-secondary">Penalty: {{ r.cxl.penalty.percent }}% {{ r.cxl.penalty.basis }}</span>
                                         {% endif %}
-
-                                        {# info volo (se agganciata alla tariffa) #}
                                         {% if r.flight and r.flight.booking_class %}
                                         <span class="badge text-bg-info">Class {{ r.flight.booking_class }}</span>
                                         {% endif %}
                                         {% if r.flight and r.flight.baggage and (r.flight.baggage.weight or r.flight.baggage.unit) %}
-                                        <span class="badge text-bg-light">
-                                            Bag {{ r.flight.baggage.weight }} {{ r.flight.baggage.unit }}
-                                        </span>
+                                        <span class="badge text-bg-light">Bag {{ r.flight.baggage.weight }} {{ r.flight.baggage.unit }}</span>
                                         {% endif %}
-
                                         {% if r.pricing_type %}
                                         <span class="badge text-bg-light">{{ r.pricing_type }}</span>
                                         {% endif %}
                                     </div>
 
-                                    {# mostra SEMPRE il booking code completo (no toggle “More details”) #}
                                     <div class="small mt-2 text-muted">
                                         Booking code: <code class="user-select-all">{{ r.booking_code }}</code>
                                     </div>
@@ -230,7 +257,6 @@
                             </div>
                         </div>
                     </label>
-
                     {% endif %}
                     {% endfor %}
                 </div>
@@ -242,13 +268,11 @@
                     </button>
                 </div>
             </form>
-
             {% else %}
             <div class="alert alert-warning mb-0">No rooms available for the selected package.</div>
             {% endif %}
         </div>
     </div>
-
 
     {# --- DEBUG / XML --- #}
     {% if request_xml or response_xml or meta %}
@@ -316,7 +340,6 @@
         {% endif %}
     </div>
     {% endif %}
-
 </div>
 
 <script>
@@ -347,7 +370,6 @@
                 if (spin) spin.classList.remove('d-none');
                 const txt = btn.querySelector('.btn-text');
                 if (txt) txt.textContent = btn.getAttribute('data-loading-text') || 'Processing…';
-
                 // overlay anti-doppio click
                 let ov = document.getElementById('submitOverlay');
                 if (!ov) {
