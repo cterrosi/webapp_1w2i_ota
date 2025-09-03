@@ -326,20 +326,18 @@ def departures_by_dest():
 @bp.route("/search", methods=["GET"], endpoint="search")
 @login_required
 def availability_search():
-    # ----- import locali (evita conflitti con altri moduli del file) -----
     from datetime import date, datetime, timedelta
     import re, requests
     from lxml import etree as ET
     from sqlalchemy import text as _sql, inspect as _inspect
     from flask import abort, current_app, render_template, request
     try:
-        from app import db  # se la tua app usa questo path
+        from app import db
     except Exception:
-        from app.extensions import db  # fallback
+        from app.extensions import db
 
     OTA_NS = "http://www.opentravel.org/OTA/2003/05"
 
-    # ---------- utils ----------
     def _pretty_xml_bytes(b: bytes) -> str:
         try:
             parser = ET.XMLParser(remove_blank_text=True, recover=True)
@@ -375,7 +373,6 @@ def availability_search():
             return ""
         return (pc.split("#", 1)[0] or "").strip()
 
-    # ---------- input ----------
     aptfrom     = (request.args.get("aptfrom") or "").upper().strip()
     destina     = (request.args.get("destina") or "").upper().strip()
     start_date  = (request.args.get("start_date") or "").strip()
@@ -405,7 +402,6 @@ def availability_search():
     if not end_date:
         end_date = (dt_start + timedelta(days=nights)).strftime("%Y-%m-%d")
 
-    # ---------- settings ----------
     cfg = get_cfg()
     base_url         = cfg.get("base_url")
     bearer           = cfg.get("bearer")
@@ -433,7 +429,6 @@ def availability_search():
     if missing:
         abort(500, description=f"Config mancante: {', '.join(missing)}")
 
-    # ---------- departures list ----------
     inspector = _inspect(db.engine)
     _dep_table = None
     for cand in ("departures_cache", "DeparturesCache"):
@@ -535,12 +530,10 @@ def availability_search():
                             destina, start_date, end_date, nights, aptfrom)
     current_app.logger.debug("Departures to query: %s", ", ".join(candidate_deps))
 
-        # ------- Precarica i package core per DEP (ORM su OTAProduct, senza hardcode tabella) -------
     from sqlalchemy import func
 
     pkg_by_dep: dict[str, list[str]] = {d: [] for d in candidate_deps}
     try:
-        # Prendo i tour_activity_code per la città richiesta
         rows = (
             db.session.query(OTAProduct.tour_activity_code)
             .filter(func.upper(OTAProduct.city_code) == destina.upper())
@@ -549,7 +542,6 @@ def availability_search():
         for (tac,) in rows:
             if not tac:
                 continue
-            # es. 0000ZNZWARSAFA#MXP2  -> core=0000ZNZWARSAFA, dep3=MXP
             hash_pos = tac.find("#")
             core = tac[:hash_pos].strip() if hash_pos > 0 else tac.strip()
             suffix = tac[hash_pos + 1 :] if hash_pos >= 0 else ""
@@ -557,7 +549,6 @@ def availability_search():
             if dep3 in pkg_by_dep and core:
                 pkg_by_dep[dep3].append(core)
 
-        # dedup & trim
         for d in list(pkg_by_dep.keys()):
             pkg_by_dep[d] = sorted({c for c in pkg_by_dep[d] if c})[:50]
 
@@ -566,7 +557,6 @@ def availability_search():
         current_app.logger.warning("pkg_by_dep ORM preload failed: %s", ex)
         pkg_by_dep = {d: [] for d in candidate_deps}
 
-    # ------- Fallback: usa departures_cache se l’ORM non ha trovato nulla -------
     if not any(pkg_by_dep.values()) and _dep_table:
         try:
             rows = db.session.execute(
@@ -601,8 +591,6 @@ def availability_search():
         except Exception as ex:
             current_app.logger.warning("pkg_by_dep fallback departures_cache failed: %s", ex)
 
-
-    # ---------- build & parse helpers ----------
     def _build_payload(dep_code: str) -> bytes:
         E = ET.Element
         rq = E("{%s}OTAX_TourActivityAvailRQ" % OTA_NS,
@@ -649,7 +637,7 @@ def availability_search():
             return f"{base}/TourActivityAvail"
         return f"{base}/OtaService/TourActivityAvail"
 
-    url = _avail_url(base_url)  # <<< DEVE stare dentro alla funzione, PRIMA del loop
+    url = _avail_url(base_url)
     headers = {
         "Authorization": f"Bearer {bearer}",
         "Content-Type": "application/xml; charset=utf-8",
@@ -657,215 +645,140 @@ def availability_search():
     }
 
     def _parse_response(content: bytes, dep_code: str):
-        """
-        Warning arricchiti:
-        - contesto DEP/date/notti/dest + timestamp
-        - extra: pkg / rp / book (anche se la risposta ha solo Errors)
-        - fallback pkg: prima departures_cache poi OTAProduct
-        """
-        offers, warnings = [], []
-        base_ctx = f"[DEP {dep_code} · {start_date}→{end_date} · {nights}n · dest {destina}]"
-
-        # parse XML resiliente
-        try:
-            parser = ET.XMLParser(remove_blank_text=True, recover=True)
-            xml_root = ET.fromstring(content or b"", parser=parser)
-        except Exception:
-            xml_root = None
-
-        if xml_root is None:
-            warnings.append(f"{base_ctx} Invalid/empty XML")
-            return offers, warnings
-
+        offers = []
+        warnings = []
         ns = {"ota": OTA_NS}
-        resp_ts = xml_root.get("TimeStamp") or xml_root.get("Timestamp") or xml_root.get("ResponseTimestamp")
-        ctx = f"{base_ctx} · ts {resp_ts}" if resp_ts else base_ctx
-
-        # errors
-        errors_raw = []
-        for err in xml_root.findall(".//ota:Errors/ota:Error", namespaces=ns):
-            cd = (err.get("Code") or "").strip()
+        try:
+            try:
+                parser = ET.XMLParser(remove_blank_text=True, recover=True)
+            except Exception:
+                parser = None
+            root = ET.fromstring(content or b"", parser=parser) if parser else ET.fromstring(content or b"")
+        except Exception as ex:
+            warnings.append(f"[DEP {dep_code} · {start_date}→{end_date} · {nights}n · dest {destina}] Invalid/empty XML ({ex.__class__.__name__})")
+            return offers, warnings
+        resp_ts = root.get("TimeStamp") or root.get("Timestamp") or root.get("ResponseTimestamp")
+        ctx = f"[DEP {dep_code} · {start_date}→{end_date} · {nights}n · dest {destina}]" + (f" · ts {resp_ts}" if resp_ts else "")
+        for err in root.findall(".//ota:Errors/ota:Error", namespaces=ns):
             st = (err.get("ShortText") or "").strip()
+            cd = (err.get("Code") or "").strip()
             detail = (err.text or "").strip()
             if detail:
                 st = f"{st} (error detail: {detail})" if st else f"(error detail: {detail})"
-            msg = f"{cd} {st}".strip() if (cd or st) else "Generic error"
-            errors_raw.append(msg)
-
-        # indizi globali
-        seen_packages, seen_rateplans, seen_bookings = set(), set(), set()
-
-        for bpi in xml_root.findall(".//ota:BasicPropertyInfo", namespaces=ns):
-            tac = (bpi.get("TourActivityCode") or "").strip()
-            if tac:
-                seen_packages.add(tac)
-
-        for rp_el in xml_root.findall(".//ota:RatePlans/ota:RatePlan", namespaces=ns):
-            code = (rp_el.get("RatePlanCode") or "").strip()
-            name = (rp_el.get("RatePlanName") or "").strip()
-            if code:
-                seen_rateplans.add(code)
-            if name and name != code:
-                seen_rateplans.add(name)
-            mi = rp_el.find("ota:MealsIncluded", namespaces=ns)
-            if mi is not None:
-                meal = (mi.get("MealPlanCodes") or mi.get("MealPlanCode") or mi.get("MealPlanIndicator") or "").strip()
-                if meal:
-                    seen_rateplans.add(meal)
-
-        for ar in xml_root.findall(".//ota:ActivityRate", namespaces=ns):
-            bc = (ar.get("BookingCode") or "").strip()
-            if bc:
-                seen_bookings.add(bc)
-                p = bc.split("|")
-                if len(p) >= 3 and p[2]:
-                    seen_rateplans.add(p[2])
-
-        # offerte
-        for act in xml_root.findall(".//ota:Activities/ota:Activity", namespaces=ns):
+            if st or cd:
+                warnings.append(f"{ctx} {(cd + ' ' + st).strip()}")
+        for act in root.findall(".//ota:Activities/ota:Activity", namespaces=ns):
             status = (act.get("AvailabilityStatus") or "").lower()
-
             bpi = act.find("ota:BasicPropertyInfo", namespaces=ns)
             name = bpi.get("TourActivityName") if bpi is not None else None
-            tac  = (bpi.get("TourActivityCode") or "").strip() if bpi is not None else ""
-            if tac:
-                seen_packages.add(tac)
-
-            # servizi → room name
-            service_map = {}
-            for at in act.findall("ota:ActivityTypes/ota:ActivityType", namespaces=ns):
-                code = (at.get("ActivityTypeCode") or "").strip()
-                t = at.find("ota:ActivityDescription/ota:Text", namespaces=ns)
-                desc = (t.text or "").strip() if (t is not None and t.text) else ""
-                if code and desc:
-                    service_map[code] = desc
-
+            tour_activity_code = bpi.get("TourActivityCode") if bpi is not None else None
+            rp = act.find("ota:RatePlans/ota:RatePlan", namespaces=ns)
+            rp_name = rp.get("RatePlanName") if rp is not None else None
             ar = act.find("ota:ActivityRates/ota:ActivityRate", namespaces=ns)
-            booking_code = (ar.get("BookingCode") or "").strip() if ar is not None else ""
-            if booking_code:
-                seen_bookings.add(booking_code)
-                p = booking_code.split("|")
-                if len(p) >= 3 and p[2]:
-                    seen_rateplans.add(p[2])
-
-            room_code_from_ar = (ar.get("ActivityTypeCode") or "").strip() if ar is not None else None
+            booking_code = ar.get("BookingCode") if ar is not None else None
+            room_code_from_ar = ar.get("ActivityTypeCode") if ar is not None else None
             tnode = ar.find("ota:Total", namespaces=ns) if ar is not None else None
             total = tnode.get("AmountAfterTax") if tnode is not None else None
             currency_node = tnode.get("CurrencyCode") if tnode is not None else None
-
             ts = act.find("ota:TimeSpan", namespaces=ns)
-            st = ts.get("Start") if ts is not None else start_date
-            en = ts.get("End")   if ts is not None else end_date
-
+            start = ts.get("Start") if ts is not None else start_date
+            end   = ts.get("End")   if ts is not None else end_date
+            img_url = None
+            img_node = act.find(".//ota:TPA_Extensions/ota:ImageItems/ota:ImageItem/ota:ImageFormat/ota:URL", namespaces=ns)
+            if img_node is not None and (img_node.text or "").strip():
+                img_url = img_node.text.strip()
+            short_desc = None
+            n = act.find(".//ota:TPA_Extensions/ota:TextItems/ota:TextItem[@SourceID='NOTE']/ota:Description", namespaces=ns)
+            if n is not None and (n.text or "").strip():
+                short_desc = n.text.strip()
+            if not short_desc:
+                n2 = act.find(".//ota:TextItems/ota:TextItem/ota:Description", namespaces=ns)
+                if n2 is not None and (n2.text or "").strip():
+                    short_desc = n2.text.strip()
+            if not short_desc:
+                n3 = act.find(".//ota:Description", namespaces=ns)
+                if n3 is not None and (n3.text or "").strip():
+                    short_desc = n3.text.strip()
+            service_map = {}
+            for at in act.findall("ota:ActivityTypes/ota:ActivityType", namespaces=ns):
+                code = at.get("ActivityTypeCode") or ""
+                text_node = at.find("ota:ActivityDescription/ota:Text", namespaces=ns)
+                desc = (text_node.text or "").strip() if text_node is not None and text_node.text else ""
+                if code and desc:
+                    service_map[code] = desc
             room_code = room_code_from_ar
-            if not room_code and booking_code and "|" in booking_code:
-                p = booking_code.split("|")
-                if len(p) >= 2:
-                    room_code = p[1]
+            if not room_code and booking_code:
+                parts = (booking_code or "").split("|")
+                if len(parts) >= 2:
+                    room_code = parts[1]
             room_name = service_map.get(room_code)
-
+            flights = []
+            flight_direction = None
+            aid = act.find(".//ota:TPA_Extensions/ota:AirItineraries/ota:AirItineraryDetail", namespaces=ns)
+            if aid is not None:
+                flight_direction = aid.get("DirectionInd")
+                odos = aid.find("ota:OriginDestinationOptions", namespaces=ns)
+                if odos is not None:
+                    for od in odos.findall("ota:OriginDestinationOption", namespaces=ns):
+                        od_rph = od.get("RPH")
+                        for seg in od.findall("ota:FlightSegment", namespaces=ns):
+                            dep_el = seg.find("ota:DepartureAirport", namespaces=ns)
+                            arr_el = seg.find("ota:ArrivalAirport", namespaces=ns)
+                            op  = seg.find("ota:OperatingAirline", namespaces=ns)
+                            mk  = seg.find("ota:MarketingAirline", namespaces=ns)
+                            bag = seg.find("ota:TPA_Extensions/ota:Baggage/ota:Weight", namespaces=ns)
+                            flights.append({
+                                "od_rph": od_rph,
+                                "departure": {
+                                    "datetime": seg.get("DepartureDateTime"),
+                                    "airport":  (dep_el.get("LocationCode") if dep_el is not None else None),
+                                    "name":     (dep_el.get("LocationName") if dep_el is not None else None),
+                                },
+                                "arrival": {
+                                    "datetime": seg.get("ArrivalDateTime"),
+                                    "airport":  (arr_el.get("LocationCode") if arr_el is not None else None),
+                                    "name":     (arr_el.get("LocationName") if arr_el is not None else None),
+                                },
+                                "flight_number": seg.get("FlightNumber"),
+                                "booking_class": seg.get("ResBookDesigCode"),
+                                "operating": {
+                                    "code": (op.get("Code") if op is not None else None),
+                                    "name": (op.get("CompanyShortName") if op is not None else None),
+                                },
+                                "marketing": {
+                                    "code": (mk.get("Code") if mk is not None else None),
+                                    "name": (mk.get("CompanyShortName") if mk is not None else None),
+                                },
+                                "baggage": {
+                                    "weight": (bag.get("Weight") if bag is not None else None),
+                                    "unit":   ((bag.text.strip() if (bag is not None and bag.text) else None)),
+                                },
+                            })
             if status in ("availableforsale", "available"):
                 offers.append({
                     "product_name": name,
-                    "tour_activity_code": tac or None,
-                    "rate_plan": None,
-                    "booking_code": booking_code or None,
+                    "tour_activity_code": tour_activity_code,
+                    "rate_plan": rp_name,
+                    "booking_code": booking_code,
                     "room_code": room_code,
                     "room_name": room_name,
                     "services": [{"code": c, "name": n} for c, n in service_map.items()],
                     "services_display": [f"{n.upper()} ({c})" for c, n in service_map.items()],
                     "total_price": total,
                     "currency": currency_node or currency,
-                    "start": st,
-                    "end": en,
+                    "start": start,
+                    "end": end,
                     "status": status,
+                    "image": img_url,
+                    "flights": flights,
+                    "flight_direction": flight_direction,
                     "departure_location": dep_code,
+                    "short_desc": short_desc,
                 })
-
-                # ===== Fallback pkg se non arrivano in response =====
-        if not seen_packages:
-            # 1) departures_cache (se presente) → ricava i "core" prima di '#'
-            try:
-                if _dep_table:
-                    q = f"""
-                        SELECT DISTINCT
-                               CASE
-                                 WHEN INSTR(product_code,'#')>0 THEN SUBSTR(product_code,1,INSTR(product_code,'#')-1)
-                                 ELSE TRIM(product_code)
-                               END AS core
-                        FROM {_dep_table}
-                        WHERE UPPER(city_code) = :dest
-                          AND date(depart_date) BETWEEN date(:start) AND date(:end)
-                          AND (duration_days = :n OR :n IS NULL)
-                          AND UPPER(SUBSTR(COALESCE(depart_airport,''),1,3)) = :dep
-                    """
-                    rows = db.session.execute(
-                        _sql(q),
-                        {
-                            "dest": destina.upper(),
-                            "start": start_date,
-                            "end": end_date,
-                            "n": nights or None,
-                            "dep": (dep_code or "").upper()[:3],
-                        },
-                    ).fetchall()
-                    seen_packages |= { (r[0] or "").strip() for r in rows if r and r[0] }
-            except Exception:
-                pass
-
-            # 2) OTAProduct → usa tour_activity_code + city_code, e filtra per DEP (MXP, FCO, …)
-            if not seen_packages:
-                try:
-                    rows = db.session.execute(
-                        _sql("""
-                            SELECT DISTINCT
-                                   CASE
-                                     WHEN INSTR(tour_activity_code,'#')>0 THEN SUBSTR(tour_activity_code,1,INSTR(tour_activity_code,'#')-1)
-                                     ELSE TRIM(tour_activity_code)
-                                   END AS core
-                            FROM OTAProduct
-                            WHERE UPPER(city_code) = :dest
-                              AND (
-                                    :dep = ''  -- nessun filtro se non ho il dep
-                                    OR UPPER(SUBSTR(tour_activity_code, INSTR(tour_activity_code,'#')+1, 3)) = :dep
-                                  )
-                            LIMIT 24
-                        """),
-                        {
-                            "dest": destina.upper(),
-                            "dep": (dep_code or "").upper()[:3],
-                        },
-                    ).fetchall()
-                    seen_packages |= { (r[0] or "").strip() for r in rows if r and r[0] }
-                except Exception:
-                    pass
-
-            # 3) ultima risorsa: se l’utente ha passato un product_core in query
-            if not seen_packages and product_core:
-                seen_packages.add(product_core)
-
-
-        # extra per i warning
-        bits = []
-        if seen_packages:
-            bits.append("pkg " + ", ".join(sorted(seen_packages))[:200])
-        if seen_rateplans:
-            bits.append("rp " + ", ".join(sorted(seen_rateplans))[:80])
-        if seen_bookings:
-            bits.append("book " + ", ".join(list(seen_bookings)[:2]))
-        extra = (" — " + " · ".join(bits)) if bits else ""
-
-        # materializza errors (con extra)
-        for emsg in errors_raw:
-            warnings.append(f"{ctx} {emsg}{extra}")
-
-        # se nessun error e nessuna offerta, aggiungi No availability (con extra)
-        if not errors_raw and not offers:
-            warnings.append(f"{ctx} No availability{extra}")
-
+        if not warnings and not offers:
+            warnings.append(f"{ctx} No availability")
         return offers, warnings
 
-    # ---------- esegui chiamate (una per DEP) ----------
     debug_traces = []
     all_offers, all_warnings = [], []
 
@@ -873,7 +786,6 @@ def availability_search():
         payload_xml = _build_payload(dep)
         req_pretty = payload_xml.decode("utf-8", errors="ignore")
         ctx = f"[DEP {dep} · {start_date}→{end_date} · {nights}n · dest {destina}]"
-
         current_app.logger.debug("[availability.search] POST %s | DEP=%s", url, dep)
         try:
             resp = requests.post(url, data=payload_xml, headers=headers, timeout=timeout_sec)
@@ -884,7 +796,6 @@ def availability_search():
                 "response_xml": "", "error": f"Network error: {ex}",
             })
             continue
-
         if resp.status_code != 200:
             all_warnings.append(f"{ctx} HTTP {resp.status_code}: {resp.text[:300]}")
             debug_traces.append({
@@ -892,17 +803,13 @@ def availability_search():
                 "response_xml": (resp.text[:20000] if resp.text else ""), "error": f"HTTP {resp.status_code}",
             })
             continue
-
         resp_pretty = _pretty_xml_bytes(resp.content or b"")
         debug_traces.append({
             "dep": dep, "status": resp.status_code, "request_xml": req_pretty,
             "response_xml": resp_pretty, "error": None,
         })
-
         try:
             offers_dep_raw, warnings_dep = _parse_response(resp.content, dep)
-
-            # Arricchisci i warning con i pkg pre-caricati, se non già presenti
             pkgs = pkg_by_dep.get(dep) or []
             if pkgs and warnings_dep:
                 extra_pkg = " — pkg " + ", ".join(pkgs[:6])
@@ -913,11 +820,7 @@ def availability_search():
                     else:
                         enriched.append(w + extra_pkg)
                 warnings_dep = enriched
-
             all_warnings.extend(warnings_dep)
-
-
-            # Filtra: solo offerte con date esatte
             offers_dep = [
                 o for o in offers_dep_raw
                 if (o.get("start") or "")[:10] == start_date
@@ -925,12 +828,10 @@ def availability_search():
             ]
             if not offers_dep and offers_dep_raw:
                 all_warnings.append(f"{ctx} Nessuna offerta con le date esatte richieste (risposte su date diverse).")
-
             all_offers.extend(offers_dep)
         except Exception as ex:
             all_warnings.append(f"{ctx} Parse error: {ex}")
 
-    # ---------- meta ----------
     meta = {
         "currency": currency,
         "raw_errors": all_warnings,
@@ -948,7 +849,6 @@ def availability_search():
         },
     }
 
-    # ---------- raggruppa + ordina ----------
     from decimal import Decimal, InvalidOperation
 
     def _parse_price(x):
@@ -1052,7 +952,6 @@ def availability_search():
     total_packages = len(all_offers)
     meta["counts"] = {"groups": group_count, "packages": total_packages}
 
-    # ---------- render ----------
     return render_template(
         "availability/search_grouped.html",
         groups=groups,
@@ -1069,6 +968,7 @@ def availability_search():
         children_ages=children_ages,
         currency=currency,
     )
+
 
 
 

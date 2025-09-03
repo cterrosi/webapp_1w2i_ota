@@ -25,6 +25,27 @@ from ..settings import DEBUG_DIR
 
 bp = Blueprint("products", __name__)
 
+def _save_detail_only(product_id: int, detail: dict):
+    rec = db.session.query(OTAProductDetail).filter_by(product_id=product_id).one_or_none()
+    payload = dict(
+        product_id=product_id,
+        name=(detail.get("name") or "").strip(),
+        duration=(detail.get("duration") or "").strip(),
+        city=(detail.get("city") or "").strip(),
+        country=(detail.get("country") or "").strip(),
+        categories_json=json.dumps(detail.get("categories") or []),
+        types_json=json.dumps(detail.get("types") or []),
+        descriptions_json=json.dumps(detail.get("descriptions") or []),
+        pickup_notes_json=json.dumps(detail.get("pickup_notes") or []),
+    )
+    if rec:
+        for k, v in payload.items():
+            setattr(rec, k, v)
+    else:
+        db.session.add(OTAProductDetail(**payload))
+    db.session.commit()
+
+
 def _normalize_base_url(url: str) -> str:
     return (url or "").rstrip("/")
 

@@ -165,8 +165,6 @@
 
 <script>
     (() => {
-        console.log('[booking] scripts block LOADED');
-
         const $ = s => document.querySelector(s);
         const startInput = $('#start_date');
         const endInput = $('#end_date');
@@ -176,175 +174,133 @@
         const spinner = $('#globalSpinner');
 
         function showSpinner(on) { if (spinner) spinner.classList.toggle('d-none', !on); }
-        function addDays(isoDate, days) {
-            const d = new Date(isoDate);
-            d.setDate(d.getDate() + (parseInt(days, 10) || 0));
-            return d.toISOString().slice(0, 10);
-        }
-        // Chiave data locale stabile YYYY-MM-DD
-        function dateKey(d) {
-            const y = d.getFullYear();
-            const m = String(d.getMonth() + 1).padStart(2, '0');
-            const dd = String(d.getDate()).padStart(2, '0');
-            return `${y}-${m}-${dd}`;
-        }
+        function addDays(iso, d) { const x = new Date(iso); x.setDate(x.getDate() + (parseInt(d, 10) || 0)); return x.toISOString().slice(0, 10); }
+        function dateKey(d) { const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, '0'), dd = String(d.getDate()).padStart(2, '0'); return `${y}-${m}-${dd}`; }
 
-        const deps = new Set(); // date abilitate
-        const durMap = new Map(); // ISO -> nights
-        const aptMap = new Map(); // ISO -> Set(IATA/label)
+        const deps = new Set();     // date selezionabili
+        const durMap = new Map();     // YYYY-MM-DD -> nights
+        const aptMap = new Map();     // YYYY-MM-DD -> Set(IATA)
+        const durSet = new Set();     // insieme durate disponibili (per rigenerare <select>)
 
-        // === Estrazione IATA molto tollerante da una stringa aeroporto ===
-        function pickIata(s) {
-            const v = (s ?? '').toString().trim();
-            if (!v) return '';
+        function rebuildNightsOptions() {
+            const values = Array.from(durSet).filter(n => Number.isInteger(n) && n > 0);
+            values.sort((a, b) => a - b);
+            const fallback = [7, 14];
+            const finalVals = values.length ? values : fallback;
 
-            // Casi tipici:
-            // "MXP" | "MXP - Milano Malpensa" | "Milano Malpensa (MXP)" | "...#MXP2"
-            // 1) parentesi: prendi l'ultimo (ABC) se presente
-            const paren = v.match(/\(([A-Z]{3})\)/g);
-            if (paren && paren.length) {
-                const last = paren[paren.length - 1].match(/\(([A-Z]{3})\)/);
-                if (last) return last[1];
+            const current = selNights?.value || '';
+            selNights.innerHTML = finalVals.map(v => `<option value="${v}">${v}</option>`).join('');
+            if (current && finalVals.includes(parseInt(current, 10))) {
+                selNights.value = current;
+            } else {
+                selNights.value = String(finalVals[0]);
             }
-
-            // 2) #ABC2 o #ABC: prendi ABC
-            const hashIata = v.match(/#([A-Z]{3})(\d)?\b/);
-            if (hashIata) return hashIata[1];
-
-            // 3) inizio stringa "ABC" o "ABC - ..."
-            const startIata = v.match(/^\s*([A-Z]{3})\b/);
-            if (startIata) return startIata[1];
-
-            // 4) qualunque ABC isolato all'interno
-            const anyIata = v.match(/\b([A-Z]{3})\b/);
-            if (anyIata) return anyIata[1];
-
-            // 5) ultima spiaggia: prime 3 lettere alfabetiche
-            return v.replace(/[^A-Za-z]/g, '').slice(0, 3).toUpperCase();
         }
 
-        function iataFromRow(it) {
-            // Usa preferenzialmente depart_airport (come da DB)
-            const fields = [
-                'depart_airport',
-                // fallback possibili se il backend in futuro usa nomi diversi
-                'departure_airport', 'departAirport', 'departureAirport',
-                'airport', 'airport_name', 'airport_code',
-                'product_code', 'tour_activity_code', 'code'
-            ];
-            for (const f of fields) {
-                if (it && f in it && it[f]) {
-                    const iata = pickIata(it[f]);
-                    if (iata) return iata;
-                }
-            }
-            return '';
+        function pickIataLabel(val) {
+            const s = (val || '').toString();
+            const m1 = s.match(/\(([A-Z]{3})\)/g);
+            if (m1 && m1.length) { const m = m1[m1.length - 1].match(/\(([A-Z]{3})\)/); if (m) return m[1]; }
+            const m2 = s.match(/#([A-Z]{3})(\d)?\b/); if (m2) return m2[1];
+            const m3 = s.match(/^\s*([A-Z]{3})\b/); if (m3) return m3[1];
+            const m4 = s.match(/\b([A-Z]{3})\b/); if (m4) return m4[1];
+            return s.replace(/[^A-Za-z]/g, '').slice(0, 3).toUpperCase();
         }
-
         function currentAptValue() {
-            const val = (selApt?.value || '').trim();
-            if (!val) return '';
-            // prova direttamente IATA
-            const m = val.match(/\b([A-Z]{3})\b/);
-            if (m) return m[1];
-            // se è "MXP2" o simile
-            const m2 = val.match(/\b([A-Z]{3})\d\b/);
-            if (m2) return m2[1];
-            return val.replace(/[^A-Za-z]/g, '').slice(0, 3).toUpperCase();
+            const v = (selApt?.value || '').trim();
+            if (!v) return '';
+            const m = v.match(/\b([A-Z]{3})\b/); if (m) return m[1];
+            const m2 = v.match(/\b([A-Z]{3})\d\b/); if (m2) return m2[1];
+            return v.replace(/[^A-Za-z]/g, '').slice(0, 3).toUpperCase();
         }
 
         let fp = null;
         function initFlatpickr() {
             if (fp) { fp.destroy(); fp = null; }
-            const enabledDates = Array.from(deps).sort();
+            const enabled = Array.from(deps).sort();
             fp = flatpickr(startInput, {
                 dateFormat: "Y-m-d",
                 disableMobile: true,
                 allowInput: true,
-                enable: enabledDates,
+                enable: enabled,
                 showMonths: 2,
                 inline: false,
                 onOpen: () => startInput.blur(),
                 onChange: (_, dateStr) => {
-                    const n = selNights?.value || "7";
-                    endInput.value = dateStr ? addDays(dateStr, n) : "";
+                    const dur = durMap.get(dateStr) || parseInt(selNights?.value || '7', 10) || 7;
+                    if (selNights) selNights.value = String(dur);
+                    endInput.value = dateStr ? addDays(dateStr, dur) : "";
                 },
                 onDayCreate: (_, __, ___, dayElem) => {
                     const iso = dateKey(dayElem.dateObj);
                     if (!deps.has(iso)) return;
-
                     dayElem.classList.add("available-day");
-
-                    let airportLabel = '';
-                    if (aptMap.has(iso) && aptMap.get(iso).size) {
-                        airportLabel = Array.from(aptMap.get(iso)).join(', ');
-                    } else {
-                        airportLabel = currentAptValue();
-                    }
-
-                    const nightsLabel = durMap.has(iso) ? `${durMap.get(iso)} nights` : '';
-                    const parts = [];
-                    if (airportLabel) parts.push(airportLabel);
-                    if (nightsLabel) parts.push(nightsLabel);
-                    dayElem.title = parts.join(' - ');
+                    const dur = durMap.get(iso);
+                    const apt = aptMap.has(iso) && aptMap.get(iso).size
+                        ? Array.from(aptMap.get(iso)).join(', ')
+                        : currentAptValue();
+                    const bits = [];
+                    if (apt) bits.push(apt);
+                    if (dur) bits.push(`${dur} nights`);
+                    dayElem.title = bits.join(' - ');
                 }
             });
         }
 
         async function loadDepartures() {
-            deps.clear();
-            durMap.clear();
-            aptMap.clear();
-            startInput.value = '';
-            endInput.value = '';
+            deps.clear(); durMap.clear(); aptMap.clear(); durSet.clear();
+            startInput.value = ''; endInput.value = '';
 
             const dest = selDest?.value;
-            if (!dest) { initFlatpickr(); return; }
+            if (!dest) { rebuildNightsOptions(); initFlatpickr(); return; }
 
             const qs = new URLSearchParams({ dest });
             const apt = selApt?.value;
             if (apt) qs.set('aptfrom', apt);
 
-            const url = `/availability/departures/by-dest?${qs.toString()}`;
-            console.log('[booking] fetch', url);
-
             try {
-                const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
+                const res = await fetch(`/availability/departures/by-dest?${qs}`, { headers: { 'Accept': 'application/json' } });
                 if (!res.ok) throw new Error('HTTP ' + res.status);
                 const json = await res.json();
                 const rows = Array.isArray(json.rows) ? json.rows : [];
 
-                if (rows.length) console.debug('[booking] sample row:', rows[0]);
-
                 rows.forEach(it => {
-                    let dateIso = (it.date || it.depart_date || it.start_date || '').toString().slice(0, 10);
+                    const dateIso = (it.date || it.depart_date || it.start_date || '').toString().slice(0, 10);
                     if (!dateIso) return;
-
                     deps.add(dateIso);
 
                     const dur = parseInt(it.duration_days ?? it.nights ?? it.duration ?? '', 10);
-                    if (!Number.isNaN(dur) && dur > 0) durMap.set(dateIso, dur);
+                    if (Number.isInteger(dur) && dur > 0) {
+                        durMap.set(dateIso, dur);
+                        durSet.add(dur);
+                    }
 
-                    const iata = iataFromRow(it) || currentAptValue();
+                    const rawApt = it.depart_airport || it.airport || it.product_code || '';
+                    const iata = pickIataLabel(rawApt) || currentAptValue();
                     if (iata) {
                         const set = aptMap.get(dateIso) || new Set();
                         set.add(iata);
                         aptMap.set(dateIso, set);
-                    } else {
-                        // Log diagnostico: così vediamo perché manca l'aeroporto
-                        console.debug('[booking] no airport for date', dateIso, 'row=', it);
                     }
                 });
 
-                console.debug('[booking] aptMap snapshot:', Array.from(aptMap.entries()).slice(0, 5));
+                rebuildNightsOptions();
                 initFlatpickr();
+
+                // se esiste una sola durata, pre-selezionala
+                if (durSet.size === 1) {
+                    const only = Array.from(durSet)[0];
+                    selNights.value = String(only);
+                }
             } catch (e) {
-                console.error('[booking] departures exception', e);
+                rebuildNightsOptions();
                 initFlatpickr();
+                console.error('[booking] departures load failed', e);
             }
         }
 
         document.addEventListener('DOMContentLoaded', () => {
+            rebuildNightsOptions();
             initFlatpickr();
 
             selDest?.addEventListener('change', loadDepartures);
@@ -363,6 +319,10 @@
                     alert('Please select a destination and a departure date.');
                     return;
                 }
+                const s = startInput.value;
+                const dur = durMap.get(s) || parseInt(selNights?.value || '0', 10) || 0;
+                if (dur && selNights) selNights.value = String(dur);
+                if (s && dur && !endInput.value) endInput.value = addDays(s, dur);
                 showSpinner(true);
             });
 
@@ -373,14 +333,17 @@
                 if (fromBFCache) {
                     initFlatpickr();
                     if (selDest?.value) loadDepartures();
-                    if (startInput?.value && selNights?.value) {
-                        endInput.value = addDays(startInput.value, selNights.value);
+                    if (startInput?.value) {
+                        const dur = durMap.get(startInput.value) || parseInt(selNights?.value || '7', 10) || 7;
+                        selNights.value = String(dur);
+                        endInput.value = addDays(startInput.value, dur);
                     }
                 }
             });
         });
     })();
 </script>
+
 
 
 

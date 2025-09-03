@@ -33,6 +33,8 @@ RUN pip install --no-cache-dir /wheels/* && rm -rf /wheels
 COPY app/ /app/app/
 COPY static/ /app/static/
 COPY templates/ /app/templates/
+# >>> dati statici (airports.json, csv, mapping, ecc.) <<<
+COPY data/ /app/data/
 
 # seed DB (sorgente per prima esecuzione)
 COPY data/ota.db /seed/ota.db

@@ -588,137 +588,169 @@ def availability_search():
     }
 
     def _parse_response(content: bytes, dep_code: str):
-        offers = []; warnings = []
-        root = ET.fromstring(content)
-        ns = {"ota": OTA_NS}
+    
+    offers = []
+    warnings = []
 
-        for err in root.findall(".//ota:Errors/ota:Error", namespaces=ns):
-            st = (err.get("ShortText") or "").strip()
-            cd = (err.get("Code") or "").strip()
-            if st or cd:
-                warnings.append(f"{cd} {st}".strip())
+    # parser resiliente (come nella versione nuova)
+    try:
+        parser = ET.XMLParser(remove_blank_text=True, recover=True)
+        root = ET.fromstring(content or b"", parser=parser)
+    except Exception:
+        root = None
 
-        for act in root.findall(".//ota:Activities/ota:Activity", namespaces=ns):
-            status = (act.get("AvailabilityStatus") or "").lower()
-
-            bpi = act.find("ota:BasicPropertyInfo", namespaces=ns)
-            name = bpi.get("TourActivityName") if bpi is not None else None
-            tour_activity_code = bpi.get("TourActivityCode") if bpi is not None else None
-
-            rp = act.find("ota:RatePlans/ota:RatePlan", namespaces=ns)
-            rp_name = rp.get("RatePlanName") if rp is not None else None
-
-            ar = act.find("ota:ActivityRates/ota:ActivityRate", namespaces=ns)
-            booking_code = ar.get("BookingCode") if ar is not None else None
-            room_code_from_ar = ar.get("ActivityTypeCode") if ar is not None else None
-            tnode = ar.find("ota:Total", namespaces=ns) if ar is not None else None
-            total = tnode.get("AmountAfterTax") if tnode is not None else None
-            currency_node = tnode.get("CurrencyCode") if tnode is not None else None
-
-            ts = act.find("ota:TimeSpan", namespaces=ns)
-            start = ts.get("Start") if ts is not None else start_date
-            end   = ts.get("End") if ts is not None else end_date
-
-            img_url = None
-            img_node = act.find(".//ota:TPA_Extensions/ota:ImageItems/ota:ImageItem/ota:ImageFormat/ota:URL", namespaces=ns)
-            if img_node is not None and (img_node.text or "").strip():
-                img_url = img_node.text.strip()
-
-            # Descrizione breve
-            short_desc = None
-            n = act.find(".//ota:TPA_Extensions/ota:TextItems/ota:TextItem[@SourceID='NOTE']/ota:Description", namespaces=ns)
-            if n is not None and (n.text or "").strip():
-                short_desc = n.text.strip()
-            if not short_desc:
-                n2 = act.find(".//ota:TextItems/ota:TextItem/ota:Description", namespaces=ns)
-                if n2 is not None and (n2.text or "").strip():
-                    short_desc = n2.text.strip()
-            if not short_desc:
-                n3 = act.find(".//ota:Description", namespaces=ns)
-                if n3 is not None and (n3.text or "").strip():
-                    short_desc = n3.text.strip()
-
-            service_map = {}
-            for at in act.findall("ota:ActivityTypes/ota:ActivityType", namespaces=ns):
-                code = at.get("ActivityTypeCode") or ""
-                text_node = at.find("ota:ActivityDescription/ota:Text", namespaces=ns)
-                desc = (text_node.text or "").strip() if text_node is not None and text_node.text else ""
-                if code and desc:
-                    service_map[code] = desc
-
-            room_code = room_code_from_ar
-            if not room_code and booking_code:
-                parts = (booking_code or "").split("|")
-                if len(parts) >= 2:
-                    room_code = parts[1]
-            room_name = service_map.get(room_code)
-
-            # VOLI
-            flights = []
-            flight_direction = None
-            aid = act.find(".//ota:TPA_Extensions/ota:AirItineraries/ota:AirItineraryDetail", namespaces=ns)
-            if aid is not None:
-                flight_direction = aid.get("DirectionInd")
-                odos = aid.find("ota:OriginDestinationOptions", namespaces=ns)
-                if odos is not None:
-                    for od in odos.findall("ota:OriginDestinationOption", namespaces=ns):
-                        od_rph = od.get("RPH")
-                        for seg in od.findall("ota:FlightSegment", namespaces=ns):
-                            dep = seg.find("ota:DepartureAirport", namespaces=ns)
-                            arr = seg.find("ota:ArrivalAirport", namespaces=ns)
-                            op  = seg.find("ota:OperatingAirline", namespaces=ns)
-                            mk  = seg.find("ota:MarketingAirline", namespaces=ns)
-                            bag = seg.find("ota:TPA_Extensions/ota:Baggage/ota:Weight", namespaces=ns)
-                            flights.append({
-                                "od_rph": od_rph,
-                                "departure": {
-                                    "datetime": seg.get("DepartureDateTime"),
-                                    "airport":  (dep.get("LocationCode") if dep is not None else None),
-                                    "name":     (dep.get("LocationName") if dep is not None else None),
-                                },
-                                "arrival": {
-                                    "datetime": seg.get("ArrivalDateTime"),
-                                    "airport":  (arr.get("LocationCode") if arr is not None else None),
-                                    "name":     (arr.get("LocationName") if arr is not None else None),
-                                },
-                                "flight_number": seg.get("FlightNumber"),
-                                "booking_class": seg.get("ResBookDesigCode"),
-                                "operating": {
-                                    "code": (op.get("Code") if op is not None else None),
-                                    "name": (op.get("CompanyShortName") if op is not None else None),
-                                },
-                                "marketing": {
-                                    "code": (mk.get("Code") if mk is not None else None),
-                                    "name": (mk.get("CompanyShortName") if mk is not None else None),
-                                },
-                                "baggage": {
-                                    "weight": (bag.get("Weight") if bag is not None else None),
-                                    "unit":   ((bag.text.strip() if (bag is not None and bag.text) else None)),
-                                },
-                            })
-
-            if status in ("availableforsale", "available"):
-                offers.append({
-                    "product_name": name,
-                    "tour_activity_code": tour_activity_code,
-                    "rate_plan": rp_name,
-                    "booking_code": booking_code,
-                    "room_code": room_code,
-                    "room_name": room_name,
-                    "services": [{"code": c, "name": n} for c, n in service_map.items()],
-                    "services_display": [f"{n.upper()} ({c})" for c, n in service_map.items()],
-                    "total_price": total,
-                    "currency": currency_node or currency,  # 👈 usa currency rilevata o query
-                    "start": start,
-                    "end": end,
-                    "status": status,
-                    "image": img_url,
-                    "flights": flights,
-                    "flight_direction": flight_direction,
-                    "departure_location": dep_code,
-                    "short_desc": short_desc,
-                })
+    if root is None:
+        warnings.append(f"[DEP {dep_code} · {start_date}→{end_date} · {nights}n · dest {destina}] Invalid/empty XML")
         return offers, warnings
+
+    ns = {"ota": OTA_NS}
+    resp_ts = root.get("TimeStamp") or root.get("Timestamp") or root.get("ResponseTimestamp")
+    ctx = f"[DEP {dep_code} · {start_date}→{end_date} · {nights}n · dest {destina}]" + (f" · ts {resp_ts}" if resp_ts else "")
+
+    # Errors → warning contestualizzati
+    for err in root.findall(".//ota:Errors/ota:Error", namespaces=ns):
+        st = (err.get("ShortText") or "").strip()
+        cd = (err.get("Code") or "").strip()
+        detail = (err.text or "").strip()
+        if detail:
+            st = f"{st} (error detail: {detail})" if st else f"(error detail: {detail})"
+        if st or cd:
+            warnings.append(f"{ctx} {(cd + ' ' + st).strip()}")
+
+    # Activities → offerte
+    for act in root.findall(".//ota:Activities/ota:Activity", namespaces=ns):
+        status = (act.get("AvailabilityStatus") or "").lower()
+
+        bpi = act.find("ota:BasicPropertyInfo", namespaces=ns)
+        name = bpi.get("TourActivityName") if bpi is not None else None
+        tour_activity_code = bpi.get("TourActivityCode") if bpi is not None else None
+
+        # Rate plan (per Activity)
+        rp = act.find("ota:RatePlans/ota:RatePlan", namespaces=ns)
+        rp_name = rp.get("RatePlanName") if rp is not None else None
+
+        # Prezzo / booking
+        ar = act.find("ota:ActivityRates/ota:ActivityRate", namespaces=ns)
+        booking_code = ar.get("BookingCode") if ar is not None else None
+        room_code_from_ar = ar.get("ActivityTypeCode") if ar is not None else None
+        tnode = ar.find("ota:Total", namespaces=ns) if ar is not None else None
+        total = tnode.get("AmountAfterTax") if tnode is not None else None
+        currency_node = tnode.get("CurrencyCode") if tnode is not None else None
+
+        # Date risposta (fallback ai parametri query)
+        ts = act.find("ota:TimeSpan", namespaces=ns)
+        start = ts.get("Start") if ts is not None else start_date
+        end   = ts.get("End")   if ts is not None else end_date
+
+        # Immagine
+        img_url = None
+        img_node = act.find(".//ota:TPA_Extensions/ota:ImageItems/ota:ImageItem/ota:ImageFormat/ota:URL", namespaces=ns)
+        if img_node is not None and (img_node.text or "").strip():
+            img_url = img_node.text.strip()
+
+        # Descrizione breve (NOTE → TextItems → Description)
+        short_desc = None
+        n = act.find(".//ota:TPA_Extensions/ota:TextItems/ota:TextItem[@SourceID='NOTE']/ota:Description", namespaces=ns)
+        if n is not None and (n.text or "").strip():
+            short_desc = n.text.strip()
+        if not short_desc:
+            n2 = act.find(".//ota:TextItems/ota:TextItem/ota:Description", namespaces=ns)
+            if n2 is not None and (n2.text or "").strip():
+                short_desc = n2.text.strip()
+        if not short_desc:
+            n3 = act.find(".//ota:Description", namespaces=ns)
+            if n3 is not None and (n3.text or "").strip():
+                short_desc = n3.text.strip()
+
+        # Mappa servizi (per room_name da code)
+        service_map = {}
+        for at in act.findall("ota:ActivityTypes/ota:ActivityType", namespaces=ns):
+            code = at.get("ActivityTypeCode") or ""
+            text_node = at.find("ota:ActivityDescription/ota:Text", namespaces=ns)
+            desc = (text_node.text or "").strip() if text_node is not None and text_node.text else ""
+            if code and desc:
+                service_map[code] = desc
+
+        # Room code/name
+        room_code = room_code_from_ar
+        if not room_code and booking_code:
+            parts = (booking_code or "").split("|")
+            if len(parts) >= 2:
+                room_code = parts[1]
+        room_name = service_map.get(room_code)
+
+        # VOLI
+        flights = []
+        flight_direction = None
+        aid = act.find(".//ota:TPA_Extensions/ota:AirItineraries/ota:AirItineraryDetail", namespaces=ns)
+        if aid is not None:
+            flight_direction = aid.get("DirectionInd")
+            odos = aid.find("ota:OriginDestinationOptions", namespaces=ns)
+            if odos is not None:
+                for od in odos.findall("ota:OriginDestinationOption", namespaces=ns):
+                    od_rph = od.get("RPH")
+                    for seg in od.findall("ota:FlightSegment", namespaces=ns):
+                        dep_el = seg.find("ota:DepartureAirport", namespaces=ns)
+                        arr_el = seg.find("ota:ArrivalAirport", namespaces=ns)
+                        op  = seg.find("ota:OperatingAirline", namespaces=ns)
+                        mk  = seg.find("ota:MarketingAirline", namespaces=ns)
+                        bag = seg.find("ota:TPA_Extensions/ota:Baggage/ota:Weight", namespaces=ns)
+                        flights.append({
+                            "od_rph": od_rph,
+                            "departure": {
+                                "datetime": seg.get("DepartureDateTime"),
+                                "airport":  (dep_el.get("LocationCode") if dep_el is not None else None),
+                                "name":     (dep_el.get("LocationName") if dep_el is not None else None),
+                            },
+                            "arrival": {
+                                "datetime": seg.get("ArrivalDateTime"),
+                                "airport":  (arr_el.get("LocationCode") if arr_el is not None else None),
+                                "name":     (arr_el.get("LocationName") if arr_el is not None else None),
+                            },
+                            "flight_number": seg.get("FlightNumber"),
+                            "booking_class": seg.get("ResBookDesigCode"),
+                            "operating": {
+                                "code": (op.get("Code") if op is not None else None),
+                                "name": (op.get("CompanyShortName") if op is not None else None),
+                            },
+                            "marketing": {
+                                "code": (mk.get("Code") if mk is not None else None),
+                                "name": (mk.get("CompanyShortName") if mk is not None else None),
+                            },
+                            "baggage": {
+                                "weight": (bag.get("Weight") if bag is not None else None),
+                                "unit":   ((bag.text.strip() if (bag is not None and bag.text) else None)),
+                            },
+                        })
+
+        if status in ("availableforsale", "available"):
+            offers.append({
+                "product_name": name,
+                "tour_activity_code": tour_activity_code,
+                "rate_plan": rp_name,
+                "booking_code": booking_code,
+                "room_code": room_code,
+                "room_name": room_name,
+                "services": [{"code": c, "name": n} for c, n in service_map.items()],
+                "services_display": [f"{n.upper()} ({c})" for c, n in service_map.items()],
+                "total_price": total,
+                "currency": currency_node or currency,  # valuta da XML o da query
+                "start": start,
+                "end": end,
+                "status": status,
+                "image": img_url,
+                "flights": flights,
+                "flight_direction": flight_direction,
+                "departure_location": dep_code,
+                "short_desc": short_desc,
+            })
+
+    # Se nessun errore e nessuna offerta → warning “No availability” con contesto
+    if not warnings and not offers:
+        warnings.append(f"{ctx} No availability")
+
+    return offers, warnings
+
 
     # ----------------- Esegui più chiamate (una per airport) e unisci i risultati -----------------
     all_offers = []; all_warnings = []
