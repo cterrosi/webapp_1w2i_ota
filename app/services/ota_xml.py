@@ -3,6 +3,61 @@ import html
 
 OTA_NS = "http://www.opentravel.org/OTA/2003/05"
 
+import xml.etree.ElementTree as ET
+
+def _localname(tag: str) -> str:
+    return tag.split("}")[-1] if "}" in tag else tag
+
+def _gather_inclusions_exclusions(node: ET.Element) -> tuple[list[str], list[str]]:
+    include_keys = {
+        "Included", "Includes", "Inclusions", "IncludedServices",
+        "IncludedInRate", "QuotaComprende"
+    }
+    exclude_keys = {
+        "Excluded", "Exclusions", "NotIncluded", "ExcludedServices",
+        "QuotaNonComprende", "NotInRate"
+    }
+
+    def _collect_texts(el: ET.Element) -> list[str]:
+        out = []
+        for t in el.findall(".//{*}Text"):
+            txt = (t.text or "").strip()
+            if txt:
+                out.append(txt)
+        if not out:
+            txt = (el.text or "").strip()
+            if txt:
+                out.append(txt)
+        seen, uniq = set(), []
+        for s in out:
+            if s not in seen:
+                seen.add(s)
+                uniq.append(s)
+        return uniq
+
+    inc, exc = [], []
+    if node is None:
+        return inc, exc
+
+    for el in node.iter():
+        name = _localname(el.tag)
+        if name in include_keys:
+            inc.extend(_collect_texts(el))
+        elif name in exclude_keys:
+            exc.extend(_collect_texts(el))
+
+    def _unique(items: list[str]) -> list[str]:
+        seen, res = set(), []
+        for x in items:
+            x = x.strip()
+            if x and x not in seen:
+                seen.add(x)
+                res.append(x)
+        return res
+
+    return _unique(inc), _unique(exc)
+
+
 # prima era: def build_availability_xml_with_guests(*, requestor_id: str, ...)
 # => ora accetta anche eventuali posizionali (es. self) e usa solo kwargs
 def build_availability_xml_with_guests(*_args, **kwargs) -> bytes:
@@ -108,7 +163,7 @@ def parse_availability_xml(xml_bytes: bytes) -> dict:
             nights = ""
 
     def _pick_price(node):
-        """Cerca Total in vari punti noti."""
+        # Cerca Total in vari punti noti
         if node is None:
             return "", ""
         # 1) ActivityRate/Total

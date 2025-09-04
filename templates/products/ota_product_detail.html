@@ -45,7 +45,6 @@
 </div>
 {% endif %}
 
-
 <h4 class="mt-4">Availability / Quote</h4>
 <form id="availForm"
       class="row g-2 align-items-end"
@@ -77,14 +76,27 @@
     </div>
 </form>
 
+<!-- SEZIONI QUOTE: COMPRENDE / NON COMPRENDE -->
+{% if detail.included_html %}
+<h4 class="mt-4">Incluso</h4>
+<div class="mb-2">{{ detail.included_html|safe }}</div>
+{% endif %}
 
+{% if detail.excluded_html %}
+<h4 class="mt-3">Non incluso</h4>
+<div class="mb-2">{{ detail.excluded_html|safe }}</div>
+{% endif %}
+
+{% if detail.notes_html %}
+<h4 class="mt-3">Note</h4>
+<div class="mb-2">{{ detail.notes_html|safe }}</div>
+{% endif %}
 
 
 <!-- Flatpickr (CSS + JS + locale IT) -->
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
 <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
 <script src="https://cdn.jsdelivr.net/npm/flatpickr/dist/l10n/it.js"></script>
-
 
 <script>
 (function () {
@@ -238,9 +250,6 @@
 })();
 </script>
 
-
-
-
 <style>
     /* ---- Flatpickr compatto e allineato su 7 colonne ---- */
     .flatpickr-calendar {
@@ -256,31 +265,27 @@
         font-size: 13px;
     }
 
-    /* 7 colonne per riga (fix intestazioni con 2 mesi) */
     .flatpickr-days .dayContainer {
         justify-content: flex-start !important;
     }
 
     .flatpickr-day {
-        width: calc(100%/7) !important; /* 7 colonne */
+        width: calc(100%/7) !important;
         max-width: none !important;
         height: 26px;
-        line-height: 26px; /* compatto */
+        line-height: 26px;
         margin: 0 !important;
-        color: #212529; /* giorni ben visibili */
+        color: #212529;
         box-sizing: border-box;
-        position: relative; /* per il pseudo-elemento */
-        overflow: hidden; /* evita sbordi dell'anello */
-        z-index: 1; /* testo sopra al ::before */
+        position: relative;
+        overflow: hidden;
+        z-index: 1;
     }
 
-        /* Giorni di altri mesi (servono per l’allineamento ma attenuati) */
-        .flatpickr-day.nextMonthDay,
-        .flatpickr-day.prevMonthDay {
+        .flatpickr-day.nextMonthDay, .flatpickr-day.prevMonthDay {
             color: #6c757d !important;
         }
 
-        /* --- Evidenziazione partenze: ANELLO con gap --- */
         .flatpickr-day.available-day {
             background: transparent !important;
             border: none !important;
@@ -290,11 +295,11 @@
             .flatpickr-day.available-day::before {
                 content: "";
                 position: absolute;
-                inset: 2px; /* gap intorno */
+                inset: 2px;
                 border: 1px solid #198754;
                 background: rgba(25,135,84,.30);
                 border-radius: 6px;
-                z-index: 0; /* dietro al numero */
+                z-index: 0;
                 pointer-events: none;
             }
 
@@ -302,15 +307,12 @@
                 filter: brightness(.95);
             }
 
-        /* --- Giorno selezionato: alto contrasto (blu) + testo bianco --- */
-        .flatpickr-day.selected,
-        .flatpickr-day.startRange,
-        .flatpickr-day.endRange {
-            background: #0d6efd !important; /* celeste bootstrap */
+        .flatpickr-day.selected, .flatpickr-day.startRange, .flatpickr-day.endRange {
+            background: #0d6efd !important;
             border-color: #0d6efd !important;
-            color: #fff !important; /* testo bianco */
+            color: #fff !important;
         }
-            /* niente anello verde quando il giorno è selezionato */
+
             .flatpickr-day.selected.available-day::before,
             .flatpickr-day.startRange.available-day::before,
             .flatpickr-day.endRange.available-day::before {
@@ -384,10 +386,10 @@
 
         const norm = s => (s || '').replace(/\u00A0/g, ' ').replace(/\s+/g, ' ').trim();
         const isShortTitle = t => {
-            const txt = norm(t).replace(/[:：]$/, '');        // consenti i due punti finali
+            const txt = norm(t).replace(/[:：]$/, '');
             if (!txt) return false;
             const words = txt.split(' ').filter(Boolean).length;
-            return words <= 4 && txt.length <= 28;           // “Località”, “Camere”, “Spiaggia”, …
+            return words <= 4 && txt.length <= 28;
         };
 
         function isTitleNode(n) {
@@ -398,7 +400,6 @@
                 const strong = n.querySelector('strong,b');
                 if (!strong) return false;
                 const titleText = norm(strong.textContent);
-                // il contenitore ha altro testo oltre al bold?
                 const clone = n.cloneNode(true);
                 clone.querySelectorAll('strong,b').forEach(x => x.remove());
                 const leftover = norm(clone.textContent);
@@ -412,17 +413,16 @@
         const sections = [];
         let cur = { title: 'Panoramica', nodes: [] };
         for (const n of nodes) {
-            if (n.nodeType === 3 && !norm(n.textContent)) continue; // ignora whitespace
+            if (n.nodeType === 3 && !norm(n.textContent)) continue;
             if (isTitleNode(n)) {
                 if (cur.nodes.length) sections.push(cur);
                 cur = { title: cleanTitle(n), nodes: [] };
-                continue; // non includere il titolo nel contenuto
+                continue;
             }
             cur.nodes.push(n);
         }
         if (cur.nodes.length) sections.push(cur);
 
-        // se non abbiamo trovato titoli, lasciamo tutto com'è
         if (sections.length <= 1) return;
 
         // costruisci tabs Bootstrap
@@ -461,13 +461,11 @@
             content.appendChild(pane);
         });
 
-        // sostituisci il contenuto
         root.innerHTML = '';
         root.appendChild(wrap);
         wrap.appendChild(nav);
         wrap.appendChild(content);
     })();
 </script>
-
 
 {% endblock %}

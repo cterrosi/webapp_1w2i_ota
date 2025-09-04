@@ -21,19 +21,73 @@ from ..settings import DEBUG_DIR
 
 bp = Blueprint("products", __name__)
 
+# ---------- helpers per DI TextItems (INCLUDED/NO_INCLUDED/NOTE) ----------
+OTA_NS = "http://www.opentravel.org/OTA/2003/05"
+_ns = {"ota": OTA_NS}
+
+def _extract_textitems_DI(xml_bytes) -> dict:
+    """Ritorna dict: {'INCLUDED': html, 'NO_INCLUDED': html, 'NOTE': html, ...}"""
+    out = {}
+    if not xml_bytes:
+        return out
+    try:
+        root = ET.fromstring(xml_bytes)
+    except Exception:
+        return out
+    for ti in root.findall(".//ota:TextItems/ota:TextItem", namespaces=_ns):
+        sid = (ti.get("SourceID") or "").strip().upper()
+        desc = ti.find("ota:Description", namespaces=_ns)
+        if sid and desc is not None:
+            txt = (desc.text or "").strip()
+            if txt:
+                out[sid] = html.unescape(txt)
+    return out
+
+
+def _extract_clean_descriptions_from_DI(xml_bytes) -> list[str]:
+    """
+    Raccoglie le <ota:Description> che NON sono dentro <ota:TextItems>,
+    così escludiamo le sezioni 'Quota comprende / non comprende / Note' all'origine.
+    """
+    out = []
+    if not xml_bytes:
+        return out
+    try:
+        root = ET.fromstring(xml_bytes)
+    except Exception:
+        return out
+
+    # Prendi tutte le Description che NON hanno antenati TextItems
+    for d in root.findall(".//ota:Description[not(ancestor::ota:TextItems)]", namespaces=_ns):
+        txt = "".join(d.itertext()).strip()
+        if txt:
+            out.append(txt)
+
+    # de-dup mantenendo ordine
+    seen = set()
+    clean = []
+    for s in out:
+        if s not in seen:
+            seen.add(s)
+            clean.append(s)
+    return clean
+
+
 # ---------- helpers di persistenza (dettagli e media separati) ----------
 
 def _save_detail_only(product_id: int, detail: dict | None, *, commit: bool = False):
     """
     Salva/aggiorna il dettaglio prodotto.
-    1) Prova via ORM (OTAProductDetail).
-    2) Verifica che la riga esista in 'ota_product_detail'.
-       Se NON c'è, fallback con raw SQL (includendo created_at/updated_at se NOT NULL).
+    - Aggiorna via ORM se possibile (solo colonne realmente esistenti nel model).
+    - Fallback con SQL diretto se la riga non esiste ancora.
     """
     if not detail:
         return
 
-    payload = dict(
+    # colonne effettivamente mappate sul modello
+    model_cols = set(OTAProductDetail.__table__.columns.keys())
+
+    base_payload = dict(
         product_id=product_id,
         name=(detail.get("name") or "").strip(),
         duration=(detail.get("duration") or "").strip(),
@@ -45,21 +99,24 @@ def _save_detail_only(product_id: int, detail: dict | None, *, commit: bool = Fa
         pickup_notes_json=json.dumps(detail.get("pickup_notes") or [], ensure_ascii=False),
     )
 
+    extra_payload = {
+        "included_html": detail.get("included_html") or None,
+        "excluded_html": detail.get("excluded_html") or None,
+        "notes_html":    detail.get("notes_html")    or None,
+    }
+
+    # tieni solo le chiavi che esistono nella tabella
+    payload = {k: v for k, v in {**base_payload, **extra_payload}.items() if k in model_cols}
+
     # --- 1) Tentativo ORM
     rec = db.session.query(OTAProductDetail).filter_by(product_id=product_id).one_or_none()
     if rec:
-        rec.name = payload["name"]
-        rec.duration = payload["duration"]
-        rec.city = payload["city"]
-        rec.country = payload["country"]
-        rec.categories_json = payload["categories_json"]
-        rec.types_json = payload["types_json"]
-        rec.descriptions_json = payload["descriptions_json"]
-        rec.pickup_notes_json = payload["pickup_notes_json"]
+        for k, v in payload.items():
+            setattr(rec, k, v)
     else:
         db.session.add(OTAProductDetail(**payload))
 
-    db.session.flush()  # fa emergere subito eventuali errori ORM
+    db.session.flush()  # fa emergere errori ORM subito
 
     # --- 2) Verifica presenza fisica
     from sqlalchemy import text as _sql
@@ -72,34 +129,30 @@ def _save_detail_only(product_id: int, detail: dict | None, *, commit: bool = Fa
         )
     except Exception as e:
         print(f"[DETAIL][CHECK][ERR] {e}", flush=True)
-        row_exists = True  # non forzare fallback se la SELECT ha fallito
+        row_exists = True  # evita fallback se la SELECT fallisce
 
     if not row_exists:
-        # Fallback con gestione timestamp (created_at/updated_at) se presenti e/o NOT NULL
+        # Fallback con gestione timestamp se presenti
         try:
-            # ispeziona lo schema una sola volta per capire se ci sono le colonne
             if not hasattr(_save_detail_only, "_detail_cols"):
                 cols = db.session.execute(_sql("PRAGMA table_info(ota_product_detail)")).fetchall()
-                _save_detail_only._detail_cols = {c[1]: {"notnull": bool(c[3])} for c in cols}  # name -> {notnull:0/1}
+                _save_detail_only._detail_cols = {c[1]: {"notnull": bool(c[3])} for c in cols}
             cols = getattr(_save_detail_only, "_detail_cols", {})
 
             extra_cols = []
             extra_vals = {}
-            # setta timestamp in formato ISO secondi (SQLite accetta TEXT)
             from datetime import datetime, timezone
             now_iso = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
             if "created_at" in cols:
-                extra_cols.append("created_at")
-                extra_vals["created_at"] = now_iso
+                extra_cols.append("created_at"); extra_vals["created_at"] = now_iso
             if "updated_at" in cols:
-                extra_cols.append("updated_at")
-                extra_vals["updated_at"] = now_iso
+                extra_cols.append("updated_at"); extra_vals["updated_at"] = now_iso
 
+            # ripulisci eventuali avanzi
             db.session.execute(_sql("DELETE FROM ota_product_detail WHERE product_id = :pid"), {"pid": product_id})
 
-            columns = ["product_id", "name", "duration", "city", "country",
-                       "categories_json", "types_json", "descriptions_json", "pickup_notes_json"] + extra_cols
+            columns = list(payload.keys()) + extra_cols
             placeholders = ",".join([f":{k}" for k in columns])
 
             db.session.execute(
@@ -107,12 +160,12 @@ def _save_detail_only(product_id: int, detail: dict | None, *, commit: bool = Fa
                 {**payload, **extra_vals}
             )
             db.session.flush()
-            # print(f"[DETAIL][FALLBACK] inserted product_id={product_id}", flush=True)
         except Exception as e:
             print(f"[DETAIL][FALLBACK][ERR] product_id={product_id}: {e}", flush=True)
 
     if commit:
         db.session.commit()
+
 
 
 def _replace_media_only(product_id: int, image_urls):
@@ -381,6 +434,59 @@ def ota_update_products():
         url_d = build_descriptive_endpoint(s.base_url)
         created_media = created_detail = 0
 
+        # --- extractor locale per i TextItems del DescriptiveInfo ---
+        OTA_NS = "http://www.opentravel.org/OTA/2003/05"
+        _ns = {"ota": OTA_NS}
+
+        def _extract_di_textitems(xml_bytes):
+            out = {}
+            if not xml_bytes:
+                return out
+            try:
+                root = ET.fromstring(xml_bytes)
+            except Exception:
+                return out
+            for ti in root.findall(".//ota:TextItems/ota:TextItem", namespaces=_ns):
+                sid = (ti.get("SourceID") or "").strip().upper()
+                desc = ti.find("ota:Description", namespaces=_ns)
+                txt = (desc.text or "").strip() if desc is not None else ""
+                if sid and txt:
+                    out[sid] = html.unescape(txt)
+            return out
+
+        def _extract_clean_descriptions_from_DI(xml_bytes) -> list[str]:
+            # Raccoglie le <ota:Description> che NON sono dentro <ota:TextItems>."""
+            out = []
+            if not xml_bytes:
+                return out
+            try:
+                root = ET.fromstring(xml_bytes)
+            except Exception:
+                return out
+
+            # ⚠️ Usa xpath (supporta l’asse ancestor), NON findall()
+            try:
+                desc_nodes = root.xpath(".//ota:Description[not(ancestor::ota:TextItems)]", namespaces=_ns)
+            except Exception:
+                # fallback ultra-conservativo: prendi tutte le Description (meglio che saltare tutto)
+                desc_nodes = root.xpath(".//ota:Description", namespaces=_ns)
+
+            for d in desc_nodes:
+                # prendi il testo completo (anche con figli)
+                txt = "".join(d.itertext()).strip()
+                if txt:
+                    out.append(txt)
+
+            # de-dup preservando ordine
+            seen, clean = set(), []
+            for s in out:
+                if s not in seen:
+                    seen.add(s)
+                    clean.append(s)
+            return clean
+
+
+
         print(f"[PRODUCTS][EAGER] start: cores={len(cores)}, maxcores={maxcores}, fill_images={fill_images}, fill_details={fill_details}", flush=True)
 
         for idx, (core, product_ids) in enumerate(cores.items(), start=1):
@@ -398,6 +504,21 @@ def ota_update_products():
                 rep_row = db.session.get(OTAProduct, product_ids[0])
                 merged = merge_detail_with_row(detail, rep_row)
 
+                # --- nuovi text items (INCLUDED / NO_INCLUDED / NOTE) ---
+                ti_map = _extract_di_textitems(resp_d.content)
+                included_html = ti_map.get("INCLUDED") or ti_map.get("INCLUDE")
+                excluded_html = ti_map.get("NO_INCLUDED") or ti_map.get("NOT_INCLUDED") or ti_map.get("EXCLUDED")
+                notes_html    = ti_map.get("NOTE") or ti_map.get("NOTES")
+
+                # Usa la versione "pulita" SOLO se non è vuota
+                clean_desc = _extract_clean_descriptions_from_DI(resp_d.content)
+                if clean_desc:
+                    merged["descriptions"] = clean_desc
+
+                if debug_flag:
+                    lens = (len(included_html or ""), len(excluded_html or ""), len(notes_html or ""))
+                    print(f"[PRODUCTS][EAGER] core={core} textItems lengths (inc/exc/note)={lens}", flush=True)
+
                 # se non ci sono immagini logga, ma NON saltare (dobbiamo comunque salvare i dettagli)
                 if fill_images and not (merged.get("image_urls") or []):
                     print(f"[PRODUCTS][EAGER] core={core} no images", flush=True)
@@ -406,30 +527,39 @@ def ota_update_products():
                 batch_counter = 0
                 for pid in product_ids:
 
+                    # salva dettagli se richiesto
                     if fill_details:
-                        _save_detail_only(pid, {
-                            "name":         merged.get("name") or "",
-                            "duration":     merged.get("duration") or "",
-                            "city":         merged.get("city") or "",
-                            "country":      merged.get("country") or "",
-                            "categories":   merged.get("categories") or [],
-                            "types":        merged.get("types") or [],
-                            "descriptions": merged.get("descriptions") or [],
-                            "pickup_notes": merged.get("pickup_notes") or [],
-                        }, commit=False)
-                        created_detail += 1
+                        try:
+                            _save_detail_only(pid, {
+                                "name":         merged.get("name") or "",
+                                "duration":     merged.get("duration") or "",
+                                "city":         merged.get("city") or "",
+                                "country":      merged.get("country") or "",
+                                "categories":   merged.get("categories") or [],
+                                "types":        merged.get("types") or [],
+                                "descriptions": merged.get("descriptions") or [],
+                                "pickup_notes": merged.get("pickup_notes") or [],
+                                "included_html": included_html,
+                                "excluded_html": excluded_html,
+                                "notes_html":    notes_html,
+                            }, commit=False)
+                            created_detail += 1
+                        except Exception as e:
+                            print(f"[PRODUCTS][EAGER] detail save error core={core} pid={pid}: {e}", flush=True)
 
-                        if fill_images:
+                    # importa MEDIA SEMPRE (se richiesto), indipendentemente dal detail
+                    if fill_images:
+                        try:
                             _replace_media_only(pid, merged.get("image_urls") or [])
                             if merged.get("image_urls"):
                                 created_media += len(merged.get("image_urls") or [])
+                        except Exception as e:
+                            print(f"[PRODUCTS][EAGER] media save error core={core} pid={pid}: {e}", flush=True)
 
-                        # forza la generazione SQL ora (utile per beccare errori FK o schema)
-                        db.session.flush()
-
-                        batch_counter += 1
-                        if (batch_counter % 50) == 0:
-                            db.session.commit()
+                    # commit a blocchi
+                    batch_counter += 1
+                    if (batch_counter % 50) == 0:
+                        db.session.commit()
 
             except Exception as e:
                 print(f"[PRODUCTS][EAGER] core={core} error: {e}", flush=True)
@@ -439,12 +569,13 @@ def ota_update_products():
 
     # --- VERIFICA POST-IMPORT (debug) ---
     try:
+        from sqlalchemy import text as _sql
         cnt_det = db.session.query(OTAProductDetail).count()
         cnt_med = db.session.query(OTAProductMedia).count()
         print(f"[PRODUCTS][VERIFY] ota_product_detail rows = {cnt_det}, ota_product_media rows = {cnt_med}", flush=True)
 
         sample = db.session.execute(
-            "SELECT product_id, name, LENGTH(descriptions_json) AS dlen FROM ota_product_detail LIMIT 3"
+            _sql("SELECT product_id, name, LENGTH(descriptions_json) AS dlen FROM ota_product_detail LIMIT 3")
         ).fetchall()
         print(f"[PRODUCTS][VERIFY] sample detail rows: {sample}", flush=True)
     except Exception as e:
@@ -452,6 +583,7 @@ def ota_update_products():
 
 
     return redirect(url_for("products.ota_products"))
+
 
 
 # ----------------- LISTA PRODOTTI (unchanged) -----------------
@@ -540,9 +672,14 @@ def ota_product_detail(product_id: int):
             "descriptions": descriptions,
             "pickup_notes": json.loads(rec.pickup_notes_json or "[]"),
             "image_urls": image_urls,
+
+            # sezioni dedicate se presenti a DB (usa getattr per compatibilità schema)
+            "included_html": Markup(html.unescape(rec.included_html)) if getattr(rec, "included_html", None) else None,
+            "excluded_html": Markup(html.unescape(rec.excluded_html)) if getattr(rec, "excluded_html", None) else None,
+            "notes_html":    Markup(html.unescape(rec.notes_html))    if getattr(rec, "notes_html", None)    else None,
         }
     else:
-        # nessun dettaglio: fornisco struttura minimale per il template
+        # nessun dettaglio: struttura minimale per il template
         detail = {
             "name": row.tour_activity_name or "",
             "duration": "",
@@ -553,6 +690,10 @@ def ota_product_detail(product_id: int):
             "descriptions": [],
             "pickup_notes": [],
             "image_urls": image_urls,
+
+            "included_html": None,
+            "excluded_html": None,
+            "notes_html": None,
         }
 
     # link preventivi (se i template lo usano)

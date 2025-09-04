@@ -19,8 +19,31 @@ from ..services.ota_io import (
 from ..extensions import db
 from ..models import OTAProduct
 from sqlalchemy import text as _sql, bindparam
+from html import unescape as _unesc
+
 
 bp = Blueprint("availability", __name__, url_prefix="/availability")
+
+
+OTA_NS = "http://www.opentravel.org/OTA/2003/05"
+
+def _extract_text_items_from_avail(xml_root):
+    ns = {"ota": OTA_NS}
+    out = {"include": None, "exclude": None, "note": None}
+    for node in xml_root.xpath(".//ota:TPA_Extensions/ota:TextItems/ota:TextItem", namespaces=ns):
+        sid = (node.get("SourceID") or "").upper().strip()
+        desc = "".join(node.xpath("./ota:Description/text()", namespaces=ns)) or ""
+        html = _unesc(desc).strip()
+        if not html:
+            continue
+        if sid in ("INCLUDED", "INCLUDE", "INCLUSO", "INCLUSI", "INCLUDED_SERVICES"):
+            out["include"] = html
+        elif sid in ("NO_INCLUDED", "NOT_INCLUDED", "ESCLUSO", "ESCLUSI", "EXCLUDED_SERVICES"):
+            out["exclude"] = html
+        elif sid in ("NOTE", "NOTES"):
+            out["note"] = html
+    return out
+
 
 def get_cfg():
     s = get_setting_safe()
@@ -699,6 +722,13 @@ def availability_search():
                 n3 = act.find(".//ota:Description", namespaces=ns)
                 if n3 is not None and (n3.text or "").strip():
                     short_desc = n3.text.strip()
+
+            # --- QUOTA COMPRENDE / NON COMPRENDE (dall'Activity) ---
+            ti = _extract_text_items_from_avail(act)  # usa già OTA_NS e xpath con ns
+            included_html = ti.get("include") or ti.get("included")
+            excluded_html = ti.get("exclude") or ti.get("no_included") or ti.get("noincluded")
+            notes_html    = ti.get("note") or ti.get("notes")
+
             service_map = {}
             for at in act.findall("ota:ActivityTypes/ota:ActivityType", namespaces=ns):
                 code = at.get("ActivityTypeCode") or ""
@@ -774,6 +804,9 @@ def availability_search():
                     "flight_direction": flight_direction,
                     "departure_location": dep_code,
                     "short_desc": short_desc,
+                    "included_html": included_html,
+                    "excluded_html": excluded_html,
+                    "notes_html": notes_html,
                 })
         if not warnings and not offers:
             warnings.append(f"{ctx} No availability")
@@ -886,14 +919,17 @@ def availability_search():
         except Exception:
             return False
 
-    groups_map = {}
+        # ---- raggruppa per product_core, calcola min price, soluzioni volo, ecc. ----
+    groups_map: dict[str, dict] = {}
+
     for o in all_offers:
         pc, depv = _split_codes(o.get("booking_code"))
         if not pc:
             pc = "__MISC__"
-        grp = groups_map.get(pc)
+
         price = _parse_price(o.get("total_price"))
-        if not grp:
+        grp = groups_map.get(pc)
+        if grp is None:
             grp = {
                 "product_core": pc,
                 "name": (o.get("product_name") or o.get("name") or pc),
@@ -901,12 +937,17 @@ def availability_search():
                 "is_recommended": _is_recommended(pc),
                 "min_price": price,
                 "currency": (o.get("currency") or meta.get("currency") or currency),
-                "flights": {},
+                "flights": {},          # dep-variant -> { package_code, min_price, samples, direction }
                 "offers": [],
                 "short_desc": o.get("short_desc"),
+                # sezioni info servizio, se presenti
+                "included_html": o.get("included_html"),
+                "excluded_html": o.get("excluded_html"),
+                "notes_html":    o.get("notes_html"),
             }
             groups_map[pc] = grp
         else:
+            # aggiorna aggregati
             if price < grp["min_price"]:
                 grp["min_price"] = price
                 grp["currency"] = (o.get("currency") or grp["currency"] or currency)
@@ -914,7 +955,14 @@ def availability_search():
                 grp["image"] = o["image"]
             if not grp.get("short_desc") and o.get("short_desc"):
                 grp["short_desc"] = o["short_desc"]
+            if not grp.get("included_html") and o.get("included_html"):
+                grp["included_html"] = o.get("included_html")
+            if not grp.get("excluded_html") and o.get("excluded_html"):
+                grp["excluded_html"] = o.get("excluded_html")
+            if not grp.get("notes_html") and o.get("notes_html"):
+                grp["notes_html"] = o.get("notes_html")
 
+        # soluzioni volo per variante di pacchetto (parte dopo '#')
         if depv:
             sol = grp["flights"].get(depv)
             if not sol:
@@ -932,6 +980,7 @@ def availability_search():
 
         grp["offers"].append(o)
 
+    # ordina gruppi e soluzioni volo
     groups = list(groups_map.values())
     groups.sort(key=lambda g: (
         0 if g["is_recommended"] else 1,
@@ -968,6 +1017,9 @@ def availability_search():
         children_ages=children_ages,
         currency=currency,
     )
+
+
+
 
 
 
@@ -1203,7 +1255,8 @@ def product_detail():
     from markupsafe import Markup
     from app.extensions import db
     from app.models import OTAProduct, OTAProductDetail, OTAProductMedia
-    from datetime import date
+    from datetime import date, datetime  # <— aggiunto datetime per updated_at
+    from html import unescape as _html_unescape  # <— per decodificare &lt;ul&gt; ecc.
 
     OTA_NS = "http://www.opentravel.org/OTA/2003/05"
     ns = {"ota": OTA_NS}
@@ -1315,18 +1368,19 @@ def product_detail():
 
     def _to_dec(x):
         """Decimal robusto su '2,048.00' o '2048,00' ecc."""
+        from decimal import Decimal as D
         if x is None:
             raise InvalidOperation
         s = str(x).strip().replace(" ", "")
         if s.count(",") > 0 and s.count(".") > 0:
             try:
-                return Decimal(s.replace(".", "").replace(",", "."))
+                return D(s.replace(".", "").replace(",", "."))
             except InvalidOperation:
                 pass
         try:
-            return Decimal(s.replace(",", ""))
+            return D(s.replace(",", ""))
         except InvalidOperation:
-            return Decimal("Infinity")
+            return D("Infinity")
 
     # ---- Avail filtrata per TourActivityCode = package_code ----
     E = ET.Element
@@ -1377,6 +1431,10 @@ def product_detail():
     # ---- Parse + GALLERY ----
     try:
         root = ET.fromstring(resp.content)
+
+        # NB: funzione già presente nel modulo; ritorna dict con include/exclude/note se esistono
+        text_items = _extract_text_items_from_avail(root)
+
         product_name = None
         room_options = []
 
@@ -1587,6 +1645,7 @@ def product_detail():
                 "image_urls":   image_urls_db,
             }
     else:
+        rec = None
         detail = {
             "name":         product_name or core,
             "duration":     "",
@@ -1599,6 +1658,116 @@ def product_detail():
             "image_urls":   [],
         }
 
+    # ============================================================
+    #  SEZIONI INCLUDE/EXCLUDE/NOTE: DB -> Avail -> DI (fallback)
+    # ============================================================
+    included_html = None
+    excluded_html = None
+    notes_html    = None
+
+    # 1) prova a leggere dal DB, solo se le colonne esistono
+    if rec is not None:
+        if hasattr(rec, "included_html"):
+            included_html = (rec.included_html or None)
+        if hasattr(rec, "excluded_html"):
+            excluded_html = (rec.excluded_html or None)
+        if hasattr(rec, "notes_html"):
+            notes_html = (rec.notes_html or None)
+
+    # 2) fallback: Avail (dizionario già estratto)
+    if text_items:
+        if not included_html and (text_items.get("include") or text_items.get("included")):
+            included_html = _html_unescape(text_items.get("include") or text_items.get("included") or "")
+        if not excluded_html and (text_items.get("exclude") or text_items.get("no_included") or text_items.get("noincluded")):
+            excluded_html = _html_unescape(text_items.get("exclude") or text_items.get("no_included") or text_items.get("noincluded") or "")
+        if not notes_html and (text_items.get("note") or text_items.get("notes")):
+            notes_html = _html_unescape(text_items.get("note") or text_items.get("notes") or "")
+
+    # 3) fallback: chiama DI per leggere i TextItems separati
+    def _fetch_DI_sections(tac: str):
+        if not tac:
+            return {}
+        E = ET.Element
+        rq = E("{%s}OTAX_TourActivityDescriptiveInfoRQ" % OTA_NS,
+               Target=target, PrimaryLangID=primary_lang_id, MarketCountryCode=market_country,
+               nsmap={None: OTA_NS})
+        pos = E("{%s}POS" % OTA_NS); src = E("{%s}Source" % OTA_NS)
+        pos.append(src); rq.append(pos)
+        src.append(E("{%s}RequestorID" % OTA_NS, ID=requestor_id, MessagePassword=message_password))
+
+        infos = E("{%s}TourActivityDescriptiveInfos" % OTA_NS); rq.append(infos)
+        info = E("{%s}TourActivityDescriptiveInfo" % OTA_NS, ChainCode=chain_code, TourActivityCode=tac)
+        infos.append(info)
+
+        # chiediamo esplicitamente i TextItems
+        tpa = E("{%s}TPA_Extensions" % OTA_NS); info.append(tpa)
+        ret_txt = E("{%s}ReturnTextItems" % OTA_NS); ret_txt.text = "true"; tpa.append(ret_txt)
+
+        payload = ET.tostring(rq, xml_declaration=True, encoding="utf-8", pretty_print=True)
+        try:
+            r = requests.post(_di_url(base_url), data=payload, headers=headers, timeout=timeout_sec)
+            if r.status_code != 200 or not r.content:
+                return {}
+            root2 = ET.fromstring(r.content)
+            # riuso parser generico
+            ti = _extract_text_items_from_avail(root2) or {}
+            # normalizza chiavi
+            out = {}
+            if ti.get("include") or ti.get("included"):
+                out["include"] = _html_unescape(ti.get("include") or ti.get("included") or "")
+            if ti.get("exclude") or ti.get("no_included") or ti.get("noincluded"):
+                out["exclude"] = _html_unescape(ti.get("exclude") or ti.get("no_included") or ti.get("noincluded") or "")
+            if ti.get("note") or ti.get("notes"):
+                out["note"] = _html_unescape(ti.get("note") or ti.get("notes") or "")
+            return out
+        except Exception as ex:
+            current_app.logger.warning("DI sections fetch failed: %s", ex)
+            return {}
+
+    # se manca qualcosa, prova DI su package e poi su core
+    if not (included_html and excluded_html):
+        di = _fetch_DI_sections(package_code)
+        if (not di.get("include") and not di.get("exclude")) and product_core:
+            di2 = _fetch_DI_sections(product_core)
+            if di2:
+                di = di2
+        if di:
+            included_html = included_html or di.get("include")
+            excluded_html = excluded_html or di.get("exclude")
+            notes_html    = notes_html or di.get("note")
+
+    # 4) se abbiamo trovato qualcosa, salva in cache su DB (solo se colonne presenti)
+    if rep and (included_html or excluded_html or notes_html):
+        try:
+            if rec is None:
+                rec = OTAProductDetail(product_id=rep.id, updated_at=datetime.utcnow())
+                db.session.add(rec)
+            # scrivi solo se gli attributi esistono (schema già migrato)
+            changed = False
+            if hasattr(rec, "included_html") and (included_html is not None) and (rec.included_html or "") != (included_html or ""):
+                rec.included_html = included_html
+                changed = True
+            if hasattr(rec, "excluded_html") and (excluded_html is not None) and (rec.excluded_html or "") != (excluded_html or ""):
+                rec.excluded_html = excluded_html
+                changed = True
+            if hasattr(rec, "notes_html") and (notes_html is not None) and (rec.notes_html or "") != (notes_html or ""):
+                rec.notes_html = notes_html
+                changed = True
+            if changed:
+                rec.updated_at = datetime.utcnow()
+                db.session.commit()
+        except Exception as ex:
+            current_app.logger.warning("Persist include/exclude/notes failed: %s", ex)
+            try:
+                db.session.rollback()
+            except Exception:
+                pass
+
+    # 5) esponi al template
+    detail["included_html"] = Markup(included_html or "")
+    detail["excluded_html"] = Markup(excluded_html or "")
+    detail["note"]          = (detail.get("note") or "") or (notes_html or "")
+
     return render_template(
         "availability/product_detail.html",
         product_name=product_name,
@@ -1607,17 +1776,17 @@ def product_detail():
         room_options=room_options,
         default_room_code=default_room_code,
         meta=meta,
-        flights_selected=norm_flights,   # <— normalizzati
-        out_legs=out_legs,               # <— PRONTI per il template
-        in_legs=in_legs,                 # <— PRONTI per il template
+        flights_selected=norm_flights,
+        out_legs=out_legs,
+        in_legs=in_legs,
         flight_vettore=flight_vettore,
         pp_price=pp_price,
         pp_currency=pp_currency,
         request_xml=request_xml_pretty,
         response_xml=response_xml_pretty,
         detail=detail,
+        text_items=text_items,
     )
-
 
 
 def pick_departure_airports(dest_code: str, aptfrom: str | None, start_date: str, nights: int) -> list[str]:

@@ -88,6 +88,9 @@ class OTAProductDetail(db.Model):
     pickup_notes_json = db.Column(db.Text, default="[]")
     policies_json = db.Column(db.Text, default="[]")
     contacts_json = db.Column(db.Text, default="[]")
+    included_html = db.Column(db.Text)
+    excluded_html = db.Column(db.Text)
+    notes_html    = db.Column(db.Text)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
 

@@ -98,6 +98,42 @@
     </div>
     {% endif %}
 
+    {# --- SEZIONI TESTUALI: NOTE / INCLUDE / NON INCLUDE --- #}
+    {% set inc_html = detail.included_html or (text_items.include if text_items else None) %}
+    {% set exc_html = detail.excluded_html or (text_items.exclude if text_items else None) %}
+    {% set note_html = detail.note or (text_items.note if text_items else None) %}
+
+    {% if inc_html or exc_html or note_html %}
+    {% if note_html %}
+    <div class="card shadow-sm mb-3">
+        <div class="card-header">Note</div>
+        <div class="card-body small">
+            {{ note_html|safe }}
+        </div>
+    </div>
+    {% endif %}
+
+    {% if inc_html %}
+    <div class="card shadow-sm mb-3">
+        <div class="card-header">La quota comprende</div>
+        <div class="card-body small">
+            {{ inc_html|safe }}
+        </div>
+    </div>
+    {% endif %}
+
+    {% if exc_html %}
+    <div class="card shadow-sm mb-3">
+        <div class="card-header">La quota non comprende</div>
+        <div class="card-body small">
+            {{ exc_html|safe }}
+        </div>
+    </div>
+    {% endif %}
+    {% endif %}
+
+
+
     {# --- VOLI SELEZIONATI --- #}
     {% if flights_selected and (out_legs|length or in_legs|length) %}
     <div class="card shadow-sm mb-3">
