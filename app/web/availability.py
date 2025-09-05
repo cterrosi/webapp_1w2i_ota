@@ -1,25 +1,21 @@
+# availability.py
 import requests
 from requests.auth import HTTPBasicAuth
 from datetime import date, timedelta
 from lxml import etree as ET
+from html import unescape as _unesc
 
 from flask import (
     Blueprint, render_template, request, flash, jsonify, redirect, url_for, abort, current_app
 )
-
 from flask_login import login_required
-from sqlalchemy import text as _sql
+
+from sqlalchemy import text as _sql, bindparam, func, inspect
 
 from ..services.runtime import get_setting_safe
-from ..services.ota_io import (
-    build_quote_xml, parse_quote_full,
-    # se/quando servono:
-    build_availability_xml_from_product, parse_availability_xml
-)
+from ..services.ota_io import build_quote_xml, parse_quote_full
 from ..extensions import db
 from ..models import OTAProduct
-from sqlalchemy import text as _sql, bindparam
-from html import unescape as _unesc
 
 
 bp = Blueprint("availability", __name__, url_prefix="/availability")
@@ -84,16 +80,7 @@ def _build_avail_endpoint(base_url: str) -> str:
     base = _normalize_base_url(base_url)
     return base if base.lower().endswith("/touractivityavail") else base + "/TourActivityAvail"
 
-def _pretty_xml(xml_bytes: bytes) -> str:
-    try:
-        parser = ET.XMLParser(remove_blank_text=True, recover=True)
-        root = ET.fromstring(xml_bytes, parser=parser)
-        return ET.tostring(root, pretty_print=True, encoding="unicode")
-    except Exception:
-        try:
-            return xml_bytes.decode("utf-8", errors="ignore")
-        except Exception:
-            return str(xml_bytes)
+OTA_NS = "http://www.opentravel.org/OTA/2003/05"
 
 def _pretty_xml_bytes(b: bytes) -> str:
     try:
@@ -106,7 +93,6 @@ def _pretty_xml_bytes(b: bytes) -> str:
         except Exception:
             return str(b)
 
-
 # ------------------------------------------------------------
 # Quote (già tua)
 # ------------------------------------------------------------
@@ -118,7 +104,7 @@ def availability_quote(product_id):
         form_preview = request.form.to_dict()
         print("[QUOTE POST]", form_preview, flush=True)
         if (not request.values.get("booking_code")) and (form_preview.get("action") == "availability"):
-            return redirect(url_for("ota_product_availability", product_id=product_id), code=307)
+            return redirect(url_for("products.ota_product_availability", product_id=product_id), code=307)
     else:
         print("[QUOTE GET args]", request.args.to_dict(), flush=True)
 
@@ -1037,14 +1023,10 @@ def availability_search():
 @bp.route("/quote_by_code", methods=["POST"], endpoint="quote_by_code")
 @login_required
 def quote_by_code():
-    import re, requests
-    from datetime import date
-    from lxml import etree as ET
-    from sqlalchemy import text as _sql
     try:
-        from app import db  # adatta se il tuo import è diverso
+        from app import db  # fallback se l'app è montata diversamente
     except Exception:
-        from app.extensions import db  # fallback, se usi questa convenzione
+        from app.extensions import db
 
     booking_code = (request.form.get("booking_code") or "").strip()
     start_date   = (request.form.get("start_date") or "").strip()
