@@ -43,6 +43,97 @@ def _extract_textitems_DI(xml_bytes) -> dict:
                 out[sid] = html.unescape(txt)
     return out
 
+def _strip_tags_keep_text(html_str: str) -> str:
+    if not html_str:
+        return ""
+    # rimuove tag HTML basilare, lascia solo testo
+    return re.sub(r"(?is)<[^>]+>", "", html_str or "").strip()
+
+def _cut_at_heading(html_str: str) -> str:
+    
+    #Se trova un heading tipo 'La quota comprende', 'Quota non comprende', 'Inclusioni', 'Esclusioni', 'Note'
+    #(anche con tag in mezzo), tronca la descrizione PRIMA di quel blocco.
+    
+    if not html_str:
+        return html_str
+    # testo "piatto" per individuare l'indice di taglio
+    plain = _strip_tags_keep_text(html_str).lower()
+
+    heads = [
+        "la quota comprende", "quota comprende", "inclusioni", "incluso", "include",
+        "la quota non comprende", "quota non comprende", "esclusioni", "escluso", "non incluso",
+        "note", "informazioni utili", "importante",
+    ]
+    # trova la prima occorrenza tra tutti gli heading
+    idx = min([plain.find(h) for h in heads if plain.find(h) >= 0] or [-1])
+    if idx < 0:
+        return html_str
+
+    # Heuristica: individua la riga nel testo originale dove cade l'indice sul plain
+    # Taglio "grezzo": taglia dopo ~idx caratteri reali, ma per sicurezza cerca dal testo originale
+    # il paragrafo che contiene quell'heading in forma "taggata"
+    # fallback: taglia alla posizione indicativa
+    try:
+        # spezzetta l'HTML per paragrafi/blocchi comuni
+        parts = re.split(r"(?is)(?:</p>|<br\s*/?>|\n)", html_str)
+        acc_plain_len = 0
+        keep_parts = []
+        for part in parts:
+            acc_plain_len += len(_strip_tags_keep_text(part))
+            if acc_plain_len >= idx:
+                break
+            keep_parts.append(part)
+        cut = "<br>".join(keep_parts).strip()
+        return cut
+    except Exception:
+        # fallback super-semplice: taglio netto
+        return html_str[:max(0, idx)].strip()
+
+def _purge_inclusions_from_descriptions(desc_list, included_html, excluded_html, notes_html):
+    """
+    Pulisce ogni elemento di desc_list rimuovendo:
+    - i blocchi inclusi/esclusi/note se compaiono pari-pari come substring
+    - eventuali heading (anche se spezzati da tag) tagliando la descrizione prima
+    - ripulisce vuoti e boilerplate
+    """
+    out = []
+    subs = [s for s in [included_html, excluded_html, notes_html] if s]
+    for d in (desc_list or []):
+        if not d:
+            continue
+        s = d
+
+        # 1) rimuovi blocchi se sono substring dirette
+        for sub in subs:
+            if sub and sub in s:
+                s = s.replace(sub, " ").strip()
+
+        # 2) se compaiono heading (anche con tag), taglia prima
+        s2 = _cut_at_heading(s)
+
+        # 3) pulizie finali
+        s2 = re.sub(r"(?is)(<p>\s*</p>|<br\s*/?>\s*){2,}", "<br>", s2).strip()
+        s2 = re.sub(r"(?is)^\s*(<p>|</p>|<br\s*/?>)+", "", s2)
+        s2 = re.sub(r"(?is)(<p>|</p>|<br\s*/?>)+\s*$", "", s2)
+        plain = _strip_tags_keep_text(s2)
+        if plain:
+            out.append(s2)
+    return out
+
+
+def _strip_qc_blocks(text: str) -> str:
+    """Rimuove blocchi 'Quota comprende / non comprende / Note' dal testo generico."""
+    if not text:
+        return text
+    heads = [
+        r"la\s+quota\s+comprende", r"quota\s+comprende", r"inclus[oi]", r"include",
+        r"la\s+quota\s+non\s+comprende", r"quota\s+non\s+comprende", r"non\s+inclus[oi]", r"esclus[oi]",
+        r"note\b", r"importante\b", r"informazioni\s+utili"
+    ]
+    import re
+    pattern = r"(?is)\s*(?:^|\n)\s*(?:{}).*".format("|".join(heads))
+    return re.sub(pattern, "", text, count=1).strip()
+
 
 def _extract_clean_descriptions_from_DI(xml_bytes) -> list[str]:
     """
@@ -510,10 +601,18 @@ def ota_update_products():
                 excluded_html = ti_map.get("NO_INCLUDED") or ti_map.get("NOT_INCLUDED") or ti_map.get("EXCLUDED")
                 notes_html    = ti_map.get("NOTE") or ti_map.get("NOTES")
 
-                # Usa la versione "pulita" SOLO se non è vuota
+                # Usa la versione "pulita" se disponibile, altrimenti ripulisci le descrizioni originali
                 clean_desc = _extract_clean_descriptions_from_DI(resp_d.content)
                 if clean_desc:
                     merged["descriptions"] = clean_desc
+                else:
+                    # niente descrizione "pulita": deduplica togliendo i blocchi Include/Exclude/Note e taglia a eventuali heading
+                    merged["descriptions"] = _purge_inclusions_from_descriptions(
+                        merged.get("descriptions") or [],
+                        included_html,
+                        excluded_html,
+                        notes_html,
+                    )
 
                 if debug_flag:
                     lens = (len(included_html or ""), len(excluded_html or ""), len(notes_html or ""))
