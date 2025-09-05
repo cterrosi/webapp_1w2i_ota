@@ -1769,34 +1769,3 @@ def product_detail():
         detail=detail,
         text_items=text_items,
     )
-
-
-def pick_departure_airports(dest_code: str, aptfrom: str | None, start_date: str, nights: int) -> list[str]:
-    # Se l'utente ha selezionato un aeroporto specifico, usalo e basta
-    if aptfrom:
-        return [aptfrom]
-
-    # 1) Prova dalla cache partenze (richiede che departures_cache abbia city_code)
-    rows = db.session.execute(_sql("""
-        SELECT DISTINCT depart_airport
-        FROM departures_cache
-        WHERE city_code = :dest
-          AND duration_days = :nights
-          AND date(depart_date) = date(:start)
-        ORDER BY depart_airport
-    """), {"dest": dest_code, "nights": nights, "start": start_date}).fetchall()
-    airports = [r[0] for r in rows if r[0]]
-
-    if airports:
-        return airports
-
-    # 2) Fallback: deduci dagli OTAProduct (dopo il '#', 3 lettere)
-    rows2 = db.session.execute(_sql("""
-        SELECT DISTINCT SUBSTR(product_code, INSTR(product_code, '#') + 1, 3) AS apt
-        FROM ota_products
-        WHERE city_code = :dest
-        ORDER BY apt
-    """), {"dest": dest_code}).fetchall()
-    airports2 = [r[0] for r in rows2 if r[0]]
-
-    return airports2
