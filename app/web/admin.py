@@ -1,17 +1,17 @@
 # app/web/admin.py
-import os
-import io
-import zipfile
-import requests
+import os, io, zipfile, requests
 
-from flask import Blueprint, jsonify, render_template_string, redirect, url_for, flash
+from flask import Blueprint, jsonify, render_template_string, redirect, url_for, flash, current_app
 from flask_login import login_required
+
 from sqlalchemy import text as _sql
+from sqlalchemy.exc import OperationalError
 
 from ..extensions import db
 from ..services.runtime import get_setting_safe
 from ..services.ota_endpoints import build_admin_calendar_url
 from ..settings import JSON_DIR, JSON_TEMP_DIR
+from ..models import OTAProduct, OTAProductMedia, OTAProductDetail
 
 bp = Blueprint("admin", __name__, url_prefix="/admin")
 
@@ -103,10 +103,11 @@ def download_departures_zip():
     try:
         r = requests.get(url, timeout=180)
         r.raise_for_status()
-    except requests.RequestException:
+    except requests.RequestException as ex:
         body = ""
         try:
-            body = (r.text or "")[:2000]
+            if getattr(ex, "response", None) is not None:
+                body = (ex.response.text or "")[:2000]
         except Exception:
             pass
         return render_template_string("""
@@ -243,7 +244,6 @@ def clear_departures_cache():
 @bp.get("/prod_diag", endpoint="prod_diag")
 @login_required
 def prod_diag():
-    from sqlalchemy import text as _sql
     info = {
         "engine_url": str(db.engine.url),
         "counts": {},
