@@ -1,7 +1,7 @@
 # app/web/products.py
 import os, json, html, re, requests
 from markupsafe import Markup
-from flask import Blueprint, render_template, request, redirect, url_for
+from flask import Blueprint, render_template, request, redirect, url_for, current_app
 from flask_login import login_required
 from lxml import etree as ET
 from requests.auth import HTTPBasicAuth
@@ -17,7 +17,6 @@ from ..services.ota_io import (
     build_availability_xml_from_product,
     parse_availability_xml,
 )
-from ..settings import DEBUG_DIR
 
 bp = Blueprint("products", __name__)
 
@@ -121,24 +120,10 @@ def _purge_inclusions_from_descriptions(desc_list, included_html, excluded_html,
     return out
 
 
-def _strip_qc_blocks(text: str) -> str:
-    """Rimuove blocchi 'Quota comprende / non comprende / Note' dal testo generico."""
-    if not text:
-        return text
-    heads = [
-        r"la\s+quota\s+comprende", r"quota\s+comprende", r"inclus[oi]", r"include",
-        r"la\s+quota\s+non\s+comprende", r"quota\s+non\s+comprende", r"non\s+inclus[oi]", r"esclus[oi]",
-        r"note\b", r"importante\b", r"informazioni\s+utili"
-    ]
-    import re
-    pattern = r"(?is)\s*(?:^|\n)\s*(?:{}).*".format("|".join(heads))
-    return re.sub(pattern, "", text, count=1).strip()
-
-
 def _extract_clean_descriptions_from_DI(xml_bytes) -> list[str]:
     """
-    Raccoglie le <ota:Description> che NON sono dentro <ota:TextItems>,
-    così escludiamo le sezioni 'Quota comprende / non comprende / Note' all'origine.
+    Descrizioni 'pulite' dal DescriptiveInfo:
+    prende le <ota:Description> che NON hanno antenati <ota:TextItems>.
     """
     out = []
     if not xml_bytes:
@@ -148,20 +133,26 @@ def _extract_clean_descriptions_from_DI(xml_bytes) -> list[str]:
     except Exception:
         return out
 
-    # Prendi tutte le Description che NON hanno antenati TextItems
-    for d in root.findall(".//ota:Description[not(ancestor::ota:TextItems)]", namespaces=_ns):
+    try:
+        # usa xpath (supporta 'ancestor::')
+        desc_nodes = root.xpath(".//ota:Description[not(ancestor::ota:TextItems)]", namespaces=_ns)
+    except Exception:
+        # fallback conservativo
+        desc_nodes = root.xpath(".//ota:Description", namespaces=_ns)
+
+    for d in desc_nodes:
         txt = "".join(d.itertext()).strip()
         if txt:
             out.append(txt)
 
     # de-dup mantenendo ordine
-    seen = set()
-    clean = []
+    seen, clean = set(), []
     for s in out:
         if s not in seen:
             seen.add(s)
             clean.append(s)
     return clean
+
 
 
 # ---------- helpers di persistenza (dettagli e media separati) ----------
@@ -413,9 +404,6 @@ def ota_product_availability(product_id: int):
 @bp.route("/ota_update_products", methods=["GET", "POST"], endpoint="ota_update_products")
 @login_required
 def ota_update_products():
-    import os
-    from requests.auth import HTTPBasicAuth
-    from flask import request, redirect, url_for, current_app
 
     current_app.logger.info(">>> Import request args: %s", request.args.to_dict())
     print(">>> Import request args:", request.args.to_dict())
@@ -525,59 +513,6 @@ def ota_update_products():
         url_d = build_descriptive_endpoint(s.base_url)
         created_media = created_detail = 0
 
-        # --- extractor locale per i TextItems del DescriptiveInfo ---
-        OTA_NS = "http://www.opentravel.org/OTA/2003/05"
-        _ns = {"ota": OTA_NS}
-
-        def _extract_di_textitems(xml_bytes):
-            out = {}
-            if not xml_bytes:
-                return out
-            try:
-                root = ET.fromstring(xml_bytes)
-            except Exception:
-                return out
-            for ti in root.findall(".//ota:TextItems/ota:TextItem", namespaces=_ns):
-                sid = (ti.get("SourceID") or "").strip().upper()
-                desc = ti.find("ota:Description", namespaces=_ns)
-                txt = (desc.text or "").strip() if desc is not None else ""
-                if sid and txt:
-                    out[sid] = html.unescape(txt)
-            return out
-
-        def _extract_clean_descriptions_from_DI(xml_bytes) -> list[str]:
-            # Raccoglie le <ota:Description> che NON sono dentro <ota:TextItems>."""
-            out = []
-            if not xml_bytes:
-                return out
-            try:
-                root = ET.fromstring(xml_bytes)
-            except Exception:
-                return out
-
-            # ⚠️ Usa xpath (supporta l’asse ancestor), NON findall()
-            try:
-                desc_nodes = root.xpath(".//ota:Description[not(ancestor::ota:TextItems)]", namespaces=_ns)
-            except Exception:
-                # fallback ultra-conservativo: prendi tutte le Description (meglio che saltare tutto)
-                desc_nodes = root.xpath(".//ota:Description", namespaces=_ns)
-
-            for d in desc_nodes:
-                # prendi il testo completo (anche con figli)
-                txt = "".join(d.itertext()).strip()
-                if txt:
-                    out.append(txt)
-
-            # de-dup preservando ordine
-            seen, clean = set(), []
-            for s in out:
-                if s not in seen:
-                    seen.add(s)
-                    clean.append(s)
-            return clean
-
-
-
         print(f"[PRODUCTS][EAGER] start: cores={len(cores)}, maxcores={maxcores}, fill_images={fill_images}, fill_details={fill_details}", flush=True)
 
         for idx, (core, product_ids) in enumerate(cores.items(), start=1):
@@ -596,7 +531,8 @@ def ota_update_products():
                 merged = merge_detail_with_row(detail, rep_row)
 
                 # --- nuovi text items (INCLUDED / NO_INCLUDED / NOTE) ---
-                ti_map = _extract_di_textitems(resp_d.content)
+                ti_map = _extract_textitems_DI(resp_d.content)
+
                 included_html = ti_map.get("INCLUDED") or ti_map.get("INCLUDE")
                 excluded_html = ti_map.get("NO_INCLUDED") or ti_map.get("NOT_INCLUDED") or ti_map.get("EXCLUDED")
                 notes_html    = ti_map.get("NOTE") or ti_map.get("NOTES")
