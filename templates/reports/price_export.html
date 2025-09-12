@@ -3,117 +3,146 @@
 
 {% block content %}
 <div class="container-xxl py-3">
-  <div class="d-flex justify-content-between align-items-center mb-3">
-    <h3 class="mb-0">Listino partenze</h3>
-    <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('home.home') }}">Home</a>
-  </div>
-
-  <form class="card p-3" method="post" action="{{ url_for('price_export.run_export') }}" id="priceExportForm" novalidate>
-  <input type="hidden" name="mode" id="mode" value="preview">
-
-  {# RIGA 1: campi principali, allineati in alto e help-text uniformi #}
-  <div class="row g-3 align-items-start">
-    <div class="col-12 col-md-6">
-      <label class="form-label mb-1">Hotel (cerca per nome)</label>
-      <input type="text" class="form-control" name="hotel_name" id="hotel_name"
-             placeholder="Es. Aurora Bay Resort" required autocomplete="off">
-      <input type="hidden" name="hotel_code" id="hotel_code">
-      <div class="form-text">Digita almeno 2 caratteri</div>
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h3 class="mb-0">Listino partenze</h3>
+        <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('home.home') }}">Home</a>
     </div>
 
-    <div class="col-6 col-md-3">
-      <label class="form-label mb-1">Da data</label>
-      <input type="date" class="form-control" name="date_from">
-      <div class="form-text">&nbsp;</div>
+    <form class="card p-3" method="post" action="{{ url_for('price_export.run_export') }}" id="priceExportForm" novalidate>
+        <input type="hidden" name="mode" id="mode" value="preview">
+
+        {# RIGA 1: campi principali, allineati in alto e help-text uniformi #}
+        <div class="row g-3 align-items-start">
+            <div class="col-12 col-md-6">
+                <label class="form-label mb-1">Hotel (cerca per nome)</label>
+                <input type="text" class="form-control" name="hotel_name" id="hotel_name"
+                       placeholder="Es. Aurora Bay Resort" required autocomplete="off">
+                <input type="hidden" name="hotel_code" id="hotel_code">
+                <div class="form-text">Digita almeno 2 caratteri</div>
+            </div>
+
+            <div class="col-6 col-md-3">
+                <label class="form-label mb-1">Da data</label>
+                <input type="date" class="form-control" name="date_from" value="{{ today }}" min="{{ today }}">
+                <div class="form-text">&nbsp;</div>
+            </div>
+
+            <div class="col-6 col-md-3">
+                <label class="form-label mb-1">A data</label>
+                <input type="date" class="form-control" name="date_to" value="{{ eom }}" min="{{ today }}">
+                <div class="form-text">&nbsp;</div>
+            </div>
+        </div>
+
+        {# RIGA 2: formato + bottoni, allineati in basso #}
+
+        <div class="row g-3 align-items-end mt-1">
+
+            <div class="col-12 col-md-3">
+                <label class="form-label mb-1">Markup per persona (EUR)</label>
+                <input type="number" class="form-control" name="markup" id="markup"
+                       value="50" min="0" step="1" inputmode="decimal">
+                <div class="form-text">&nbsp;</div>
+            </div>
+
+            <div class="col-12 col-md-3">
+                <label class="form-label mb-1">Formato</label>
+                <select class="form-select" name="fmt">
+                    <option value="csv">CSV (Google Sheets)</option>
+                    <option value="xlsx">Excel (XLSX)</option>
+                </select>
+            </div>
+
+            <div class="col-12 col-md-6 d-flex gap-2">
+                <button class="btn btn-outline-primary flex-fill" type="submit"
+                        onclick="document.getElementById('mode').value='preview'">
+                    Anteprima
+                </button>
+
+                <button class="btn btn-primary flex-fill" type="submit" id="btnDownload"
+                        onclick="document.getElementById('mode').value='download'">
+                    <span class="label">Scarica</span>
+                    <span class="spinner-border spinner-border-sm align-text-bottom d-none" role="status" aria-hidden="true"></span>
+                </button>
+            </div>
+
+            {# opzionale: colonna di riempimento per arrivare a 12 su md+ #}
+            <div class="d-none d-md-block col-md-3"></div>
+        </div>
+    </form>
+
+
+    <div class="mt-3 small text-muted">
+        Preset occupazioni: 1 adulto · 2 adulti · 3 adulti · 2 adulti e 1 bambino (2-11). <br>
+        (Modificabili nel file <code>price_export.py</code>, variabile <code>OCCUPANCY_PRESETS</code>.)
     </div>
-
-    <div class="col-6 col-md-3">
-      <label class="form-label mb-1">A data</label>
-      <input type="date" class="form-control" name="date_to">
-      <div class="form-text">&nbsp;</div>
-    </div>
-  </div>
-
-  {# RIGA 2: formato + bottoni, allineati in basso #}
-  <div class="row g-3 align-items-end mt-1">
-    <div class="col-12 col-md-3">
-      <label class="form-label mb-1">Formato</label>
-      <select class="form-select" name="fmt">
-        <option value="csv">CSV (Google Sheets)</option>
-        <option value="xlsx">Excel (XLSX)</option>
-      </select>
-    </div>
-
-    <div class="col-12 col-md-6 d-flex gap-2">
-      <button class="btn btn-outline-primary flex-fill" type="submit"
-              onclick="document.getElementById('mode').value='preview'">
-        Anteprima
-      </button>
-
-      <button class="btn btn-primary flex-fill" type="submit" id="btnDownload"
-              onclick="document.getElementById('mode').value='download'">
-        <span class="label">Scarica</span>
-        <span class="spinner-border spinner-border-sm align-text-bottom d-none" role="status" aria-hidden="true"></span>
-      </button>
-    </div>
-
-    {# opzionale: colonna di riempimento per arrivare a 12 su md+ #}
-    <div class="d-none d-md-block col-md-3"></div>
-  </div>
-</form>
-
-
-  <div class="mt-3 small text-muted">
-    Preset occupazioni: 1 adulto · 2 adulti · 3 adulti · 2 adulti e 1 bambino (2-11). <br>
-    (Modificabili nel file <code>price_export.py</code>, variabile <code>OCCUPANCY_PRESETS</code>.)
-  </div>
 </div>
 
 <style>
-  /* overlay spinner */
-  #pxSpinner {
-    position: fixed; inset: 0;
-    background: rgba(255,255,255,.6);
-    backdrop-filter: blur(2px);
-    display: flex; align-items: center; justify-content: center;
-    z-index: 2000;
-  }
-  #pxSpinner[hidden] { display: none !important; }
+    /* overlay spinner */
+    #pxSpinner {
+        position: fixed;
+        inset: 0;
+        background: rgba(255,255,255,.6);
+        backdrop-filter: blur(2px);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 2000;
+    }
 
-  /* assicura stessa altezza per tutte le help-text */
-  .form-text { min-height: 1.25rem; }
+        #pxSpinner[hidden] {
+            display: none !important;
+        }
 
-  .form-text { min-height: 1.25rem; } /* ~20px */
+    /* assicura stessa altezza per tutte le help-text */
+    .form-text {
+        min-height: 1.25rem;
+    }
+
+    .form-text {
+        min-height: 1.25rem;
+    }
+    /* ~20px */
 </style>
 
 <div id="pxSpinner" hidden>
-  <div class="text-center">
-    <div class="spinner-border" role="status" aria-label="Caricamento..."></div>
-    <div class="mt-2 fw-semibold">Elaboro…</div>
-  </div>
+    <div class="text-center">
+        <div class="spinner-border" role="status" aria-label="Caricamento..."></div>
+        <div class="mt-2 fw-semibold">Elaboro…</div>
+    </div>
 </div>
 
 <!-- IFRAME nascosto per i download -->
 <iframe name="dlFrame" id="dlFrame" class="d-none" hidden></iframe>
 
 <script>
-document.addEventListener('DOMContentLoaded', () => {
-  const form    = document.getElementById('priceExportForm');
-  const input   = document.getElementById('hotel_name');
-  const hidden  = document.getElementById('hotel_code');
-  const modeEl  = document.getElementById('mode');
-  const overlay = document.getElementById('pxSpinner');
-  const btnDl   = document.getElementById('btnDownload');
-  const dlSpin  = btnDl?.querySelector('.spinner-border');
-  const dlLabel = btnDl?.querySelector('.label');
+    document.addEventListener('DOMContentLoaded', () => {
+        const form = document.getElementById('priceExportForm');
+        const input = document.getElementById('hotel_name');
+        const hidden = document.getElementById('hotel_code');
+        const modeEl = document.getElementById('mode');
+        const overlay = document.getElementById('pxSpinner');
+        const btnDl = document.getElementById('btnDownload');
+        const dlSpin = btnDl?.querySelector('.spinner-border');
+        const dlLabel = btnDl?.querySelector('.label');
 
-  if (!form) return;
+        if (!form) return;
 
-  // -------- Autocomplete (come prima) --------
-  let timer = null, lastQ = "", lastList = [];
-  function dedupeByName(arr){ const seen=new Set(), out=[]; for(const it of (arr||[])){ const k=String(it.name||'').toLowerCase(); if(k && !seen.has(k)){ seen.add(k); out.push(it); }} return out; }
-  function normalize(s){ return String(s||'').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').trim().toLowerCase(); }
-  function tryExtractCode(txt){ const up=String(txt||'').toUpperCase(); const m=up.match(/\(([A-Z0-9]{10,})\)/) || up.match(/\b([A-Z0-9]{10,})\b/); return m?m[1]:""; }
+        // -------- Autocomplete (come prima) --------
+        let timer = null, lastQ = "", lastList = [];
+        function dedupeByName(arr) { const seen = new Set(), out = []; for (const it of (arr || [])) { const k = String(it.name || '').toLowerCase(); if (k && !seen.has(k)) { seen.add(k); out.push(it); } } return out; }
+        function normalize(s) { return String(s || '').normalize('NFKD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase(); }
+
+        function tryExtractCode(txt) {
+            const up = String(txt || '').toUpperCase();
+            // accetta solo formati plausibili: 4 cifre + almeno 4 alfanumerici (es. 0000MARSAL...)
+            let m = up.match(/\(([0-9]{4}[A-Z0-9]{4,})\)/);
+            if (m) return m[1];
+            m = up.match(/\b([0-9]{4}[A-Z0-9]{4,})\b/);
+            return m ? m[1] : "";
+        }
+
 
   input?.addEventListener('input', () => {
     if (hidden) hidden.value = "";
@@ -129,23 +158,63 @@ document.addEventListener('DOMContentLoaded', () => {
         let data = await res.json();
         data = dedupeByName(data); lastList = data;
         if (!dl) { dl = document.createElement('datalist'); dl.id = 'hotels_datalist'; document.body.appendChild(dl); input.setAttribute('list','hotels_datalist'); }
-        dl.innerHTML = (data||[]).map(i => `<option value="${(i.name||'').replace(/"/g,'&quot;')}"></option>`).join('');
+
+        dl.innerHTML = (data || []).map(i =>
+            `<option value="${(i.name || '').replace(/"/g, '&quot;')}"
+        data-code-base="${(i.code_base || '').replace(/"/g, '&quot;')}"
+        data-id="${i.id}"></option>`
+        ).join('');
+
       } catch(e){ console.error('suggest error', e); }
     }, 250);
   });
 
-  function syncHidden(){
+
+
+  function syncHidden() {
     if (!hidden) return;
-    const raw = input.value || ""; const name = normalize(raw);
+
+    const raw = input.value || "";
+
+    // 1) se l'utente ha scelto dal datalist, leggi il codice direttamente dall'option
+    const opt = document.querySelector('#hotels_datalist option[value="' + raw.replace(/"/g, '\\"') + '"]');
+    if (opt && opt.dataset && opt.dataset.codeBase) {
+      hidden.value = opt.dataset.codeBase;
+      return;
+    }
+
+    // 2) se l'utente ha digitato un codice valido nel testo, usalo
     const typed = tryExtractCode(raw);
-    if (typed) { hidden.value = typed; return; }
-    if (!name || !Array.isArray(lastList) || !lastList.length) { hidden.value = ""; return; }
+    if (typed) {
+      hidden.value = typed;
+      return;
+    }
+
+    // 3) fallback “intelligente” sulla lista suggerimenti (come già facevi)
+    const normalize = s => String(s || '').normalize('NFKD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase();
+    const name = normalize(raw);
+    if (!name || !Array.isArray(lastList) || !lastList.length) {
+      hidden.value = "";
+      return;
+    }
+
     let picked = lastList.find(i => normalize(i.name) === name);
-    if (!picked) { const starts = lastList.filter(i => normalize(i.name).startsWith(name)); if (starts.length === 1) picked = starts[0]; }
-    if (!picked) { const incl = lastList.filter(i => normalize(i.name).includes(name)); if (incl.length === 1) picked = incl[0]; }
+    if (!picked) {
+      const starts = lastList.filter(i => normalize(i.name).startsWith(name));
+      if (starts.length === 1) picked = starts[0];
+    }
+    if (!picked) {
+      const incl = lastList.filter(i => normalize(i.name).includes(name));
+      if (incl.length === 1) picked = incl[0];
+    }
     if (!picked && lastList.length === 1) picked = lastList[0];
+
     hidden.value = picked ? (picked.code_base || "") : "";
   }
+
+
+
+
   input?.addEventListener('change',  syncHidden);
   input?.addEventListener('blur',    syncHidden);
   input?.addEventListener('keydown', (e)=>{ if (e.key === 'Enter') syncHidden(); });

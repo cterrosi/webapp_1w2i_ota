@@ -2,11 +2,14 @@
 from __future__ import annotations
 from datetime import date, timedelta, datetime
 from typing import List
-from flask import Blueprint, render_template, request, Response, current_app, jsonify,  make_response
+from flask import Blueprint, render_template, request, Response, current_app, jsonify, make_response
 from flask_login import login_required
 from sqlalchemy import text as _sql, or_
+from decimal import Decimal, ROUND_HALF_UP
+
 import csv, io
 import json
+from calendar import monthrange
 
 try:
     import xlsxwriter
@@ -27,19 +30,14 @@ OCCUPANCY_PRESETS = [
     {"label": "1",                    "adults": 1, "children_ages": []},
     {"label": "2",                    "adults": 2, "children_ages": []},
     {"label": "3",                    "adults": 3, "children_ages": []},
-    {"label": "2 adulti e 1 bambino", "adults": 2, "children_ages": [8]},  # default child 2-11; personalizzabile
+    {"label": "2 adulti e 1 bambino", "adults": 2, "children_ages": [8]},
 ]
 
 def _cfg():
-    # ritorna l’oggetto SettingOTA (non un dict)
     return get_setting_safe()
 
 # ------- URL helpers (fix anti-duplicazione) -------
 def _build_ota_url(s, method: str) -> str:
-    """
-    Se s.base_url contiene già 'OtaService', appende solo /{method}.
-    Altrimenti costruisce /Service/{target}/v10/OtaService/{method}.
-    """
     base = (s.base_url or "").rstrip("/")
     if "OtaService" in base:
         return f"{base}/{method}"
@@ -49,19 +47,17 @@ def _avail_url_for(s) -> str:
     return _build_ota_url(s, "TourActivityAvail")
 
 def _quote_url_for(s) -> str:
-    # molti gateway espongono TourActivityQuote per il preventivo
     return _build_ota_url(s, "TourActivityQuote")
 
 def _airport_label(apt_code: str) -> str:
-    # nome semplice, non ISO (aggiunte VRN e BLQ)
     mapping = {
         "FCO": "Roma Fiumicino",
         "CIA": "Roma Ciampino",
         "MXP": "Milano Malpensa",
         "LIN": "Milano Linate",
         "BGY": "Bergamo",
-        "BLQ": "Bologna",         # <— NEW
-        "VRN": "Verona",          # <— NEW
+        "BLQ": "Bologna",
+        "VRN": "Verona",
         "VCE": "Venezia",
         "TSF": "Treviso",
         "PSA": "Pisa",
@@ -80,8 +76,6 @@ def _airport_label(apt_code: str) -> str:
     }
     base = "".join([c for c in (apt_code or "") if not c.isdigit()])  # es. "MXP2" -> "MXP"
     return mapping.get(base, base or "")
-    base = "".join([c for c in (apt_code or "") if not c.isdigit()])  # es. "MXP2" -> "MXP"
-    return mapping.get(base, base or "")
 
 def _format_it_range(depart_date: str, duration_days: int) -> str:
     y, m, d = map(int, depart_date.split("-"))
@@ -90,10 +84,6 @@ def _format_it_range(depart_date: str, duration_days: int) -> str:
     return f"Dal {start.strftime('%d/%m/%Y')} al {end.strftime('%d/%m/%Y')}"
 
 def _iter_departures_for_product(product_code_base: str, date_from: str | None = None, date_to: str | None = None):
-    """
-    Ritorna tuple (depart_date 'YYYY-MM-DD', duration_days int, airport_code str)
-    dalla tabella departures_cache.
-    """
     params = {"base": f"{product_code_base}#%"}
     where = "product_code LIKE :base"
     if date_from:
@@ -119,7 +109,6 @@ def _iter_departures_for_product(product_code_base: str, date_from: str | None =
         yield depart_str, duration, apt
 
 def _min_price_from_rooms(rooms: List[dict]) -> tuple[str, float | None, dict | None]:
-    """Ritorna (currency, best_price_float|None, best_room_dict|None) dal set di camere/prices."""
     best = None
     cur = ""
     best_room = None
@@ -135,10 +124,6 @@ def _min_price_from_rooms(rooms: List[dict]) -> tuple[str, float | None, dict | 
     return (cur or "EUR"), best, best_room
 
 def _make_guests(adults: int, children_ages: list[int]) -> list[dict]:
-    """
-    Costruisce un set minimo di ospiti per la QUOTE.
-    Adulti 35 anni, bimbi con età specificata.
-    """
     out = []
     rph = 1
     today = date.today()
@@ -180,13 +165,37 @@ def _find_product_by_name(q: str):
         .first()
     )
 
+def _wp_id_for_base_code(base_code: str) -> int | None:
+    if not base_code:
+        return None
+    row = db.session.execute(
+        _sql("""
+            SELECT ID
+            FROM wp_product_master
+            WHERE SKU = :sku
+              AND SKU IS NOT NULL
+              AND length(trim(SKU)) > 0
+            LIMIT 1
+        """),
+        {"sku": base_code}
+    ).first()
+    return int(row[0]) if row and row[0] is not None else None
+
+def _round_eur(value) -> Decimal:
+    try:
+        return Decimal(str(value)).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+    except Exception:
+        return Decimal("0")
+
 # -----------------------------
 # Routes
 # -----------------------------
 @bp.route("/", methods=["GET"])
 @login_required
 def form():
-    return render_template("reports/price_export.html")
+    today = date.today()
+    eom = date(today.year, today.month, monthrange(today.year, today.month)[1])
+    return render_template("reports/price_export.html", today=today.isoformat(), eom=eom.isoformat())
 
 @bp.route("/suggest", methods=["GET"])
 @login_required
@@ -227,12 +236,6 @@ def suggest():
         )
     return jsonify(out[:20])
 
-
-
-# in cima al file (se non li hai già)
-from flask import Response, make_response, request, render_template, current_app
-# ...
-
 @bp.route("/run", methods=["POST"])
 @login_required
 def run_export():
@@ -244,13 +247,36 @@ def run_export():
     # --- INPUT ---
     hotel_name = (request.form.get("hotel_name") or "").strip()
     hotel_code = (request.form.get("hotel_code") or "").strip()
+
+    import re
+    if hotel_code and not re.match(r"^[0-9]{4}[A-Z0-9]{4,}(?:#.*)?$", hotel_code, re.I):
+        resp = make_response("Codice non valido. Seleziona dall’elenco (non il nome).", 400)
+        resp.headers["Content-Type"] = "text/plain; charset=utf-8"
+        return resp
+
     date_from  = (request.form.get("date_from") or "").strip() or None
     date_to    = (request.form.get("date_to") or "").strip() or None
+
+    if not date_from:
+        date_from = date.today().isoformat()
+    if not date_to:
+        dfrom = date.fromisoformat(date_from)
+        eom = date(dfrom.year, dfrom.month, monthrange(dfrom.year, dfrom.month)[1])
+        date_to = eom.isoformat()
+
     fmt        = (request.form.get("fmt") or "csv").lower()
     mode       = (request.form.get("mode") or "preview").lower()
-    dl_token   = (request.form.get("dl_token") or "").strip()   # <--- token per spegnere lo spinner
+    dl_token   = (request.form.get("dl_token") or "").strip()
 
-    # helper: appiccica il cookie dl_token alla risposta SOLO per i download
+    # Markup per persona (EUR) da sommare al TOTALE camera * numero_pax
+    markup_str = (request.form.get("markup") or "0").strip().replace(",", ".")
+    try:
+        MARKUP_FLAT = Decimal(markup_str)
+        if MARKUP_FLAT < 0:
+            MARKUP_FLAT = Decimal("0")
+    except Exception:
+        MARKUP_FLAT = Decimal("0")
+
     def _attach_dl_cookie(resp: Response) -> Response:
         if mode == "download" and dl_token:
             resp.set_cookie(
@@ -259,19 +285,16 @@ def run_export():
             )
         return resp
 
-    # normalizza fmt/mode
     if fmt not in ("csv", "xlsx"):
         fmt = "csv"
     if mode not in ("preview", "download"):
         mode = "preview"
 
-    # XLSX disponibile?
     if mode == "download" and fmt == "xlsx" and not HAS_XLSX:
         resp = make_response("XLSX non disponibile (manca xlsxwriter). Usa CSV o installa xlsxwriter.", 400)
         resp.headers["Content-Type"] = "text/plain; charset=utf-8"
         return _attach_dl_cookie(resp)
 
-    # --- Riusa righe dall'anteprima se presenti ---
     rows_json = request.form.get("rows_json")
     rows = None
     if rows_json:
@@ -282,7 +305,6 @@ def run_export():
             current_app.logger.warning("PRICE EXPORT: invalid rows_json (%s), will recompute.", ex)
             rows = None
 
-    # --- Risoluzione prodotto (serve sempre per coerenza/filename) ---
     if not hotel_code:
         resp = make_response("Seleziona un hotel dall’elenco: il codice interno (hotel_code) è obbligatorio.", 400)
         resp.headers["Content-Type"] = "text/plain; charset=utf-8"
@@ -301,19 +323,20 @@ def run_export():
     struttura_id = product.id
     prod_code_value = product.tour_activity_code or ""
     product_code_base = prod_code_value.split("#")[0] if prod_code_value else ""
+
+    wp_id = _wp_id_for_base_code(product_code_base)
+
     if not product_code_base:
         resp = make_response("Prodotto trovato ma manca tour_activity_code.", 400)
         resp.headers["Content-Type"] = "text/plain; charset=utf-8"
         return _attach_dl_cookie(resp)
 
-    # --- Se NON ho rows dall’anteprima, procedo col calcolo ---
     if rows is None:
         s = _cfg()
-        url_av = _avail_url_for(s)   # BUGFIX: availability
+        url_av = _avail_url_for(s)
         url_q  = _quote_url_for(s)
         rows = []
 
-        # Prefetch departures per log chiaro
         deps = list(_iter_departures_for_product(product_code_base, date_from, date_to))
         current_app.logger.info(
             "PRICE EXPORT: departures trovate per %s in [%s..%s] => %d",
@@ -338,7 +361,7 @@ def run_export():
                         product_type=s.product_type,
                         category_code=s.category_code,
                         city_code=getattr(s, "city_code", "") or "",
-                        departure_loc=apt,     # es. "MXP2"
+                        departure_loc=apt,
                         start_date=depart_date,
                         duration_days=duration_days,
                         tour_activity_code=product_code_base,
@@ -351,7 +374,6 @@ def run_export():
                     resp_av = post_ota_xml(url_av, xml_av, settings=s, timeout=getattr(s, "timeout_seconds", 40) or 40)
                     parsed = otax.parse_availability_xml(resp_av)
 
-                    # min price
                     _, best, best_room = _min_price_from_rooms(parsed.get("rooms") or [])
                     price_val = best
 
@@ -381,7 +403,6 @@ def run_export():
                             q = otax.parse_quote_total(resp_q)
                             price_val = q.get("total")
 
-                    # LOG esemplificativo (prime 3)
                     current_app.logger.info(
                         "AVAIL %s | %s->%s | LOS=%s | occ=%s | rooms=%d | sample=%s",
                         product_code_base, depart_date, apt, duration_days, label,
@@ -396,15 +417,25 @@ def run_export():
                     )
                     price_val = None
 
+                # --- Prezzo finale ESPOSTO: TOTALE camera + (MARKUP per persona * numero_pax) ---
+                final_price = ""
+                try:
+                    if price_val is not None:
+                        tot = Decimal(str(price_val))
+                        pax = int(occ["adults"]) + len(occ["children_ages"] or [])
+                        add_on = MARKUP_FLAT * Decimal(pax)
+                        final_price = str(_round_eur(tot + add_on))
+                except Exception:
+                    final_price = ""
+
                 rows.append({
-                    "Id Struttura": f"id:{struttura_id}",
+                    "Id Struttura": (str(wp_id) if wp_id is not None else ""),
                     "Date partenza e arrivo": period_label,
                     "Aeroporto": apt_label,
                     "Numero Adulti e Bambini sotto i 12 anni": label,
-                    "Prezzo di listino": "" if price_val is None else f"{price_val:.0f}",
+                    "Prezzo di listino": final_price,
                 })
 
-    # --- PREVIEW ---
     if mode == "preview":
         return render_template(
             "reports/price_export_preview.html",
@@ -416,7 +447,6 @@ def run_export():
             date_to=date_to,
         )
 
-    # --- DOWNLOAD ---
     date_tag = ""
     if date_from or date_to:
         date_tag = f"_{date_from or ''}-{date_to or ''}".replace('/', '-')
@@ -430,7 +460,6 @@ def run_export():
         "Prezzo di listino",
     ]
 
-    # CSV
     if fmt == "csv":
         si = io.StringIO()
         writer = csv.DictWriter(si, fieldnames=headers, lineterminator="\n")
@@ -449,7 +478,6 @@ def run_export():
         )
         return _attach_dl_cookie(resp)
 
-    # XLSX
     bio = io.BytesIO()
     wb = xlsxwriter.Workbook(bio, {"in_memory": True})
     ws = wb.add_worksheet("Listino")
@@ -496,4 +524,3 @@ def download_ping_v2():
         r.delete_cookie("dl_token", path="/", samesite="Lax", secure=request.is_secure)
         return r
     return ("", 202)
-

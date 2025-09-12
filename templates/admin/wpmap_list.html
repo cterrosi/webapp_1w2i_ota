@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}Mapping WooCommerce – Elenco{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h3 class="mb-0">Mapping WooCommerce – {{ data.total }} righe</h3>
+  <div class="d-flex gap-2">
+    <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('home.home') }}">Home</a>
+  </div>
+</div>
+
+<div class="card">
+  <div class="table-responsive">
+    <table class="table table-sm align-middle mb-0">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Tipo</th>
+          <th>SKU</th>
+          <th>Nome</th>
+          <th>Pubblicato</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for r in data.rows %}
+        <tr>
+          <td>{{ r.ID }}</td>
+          <td>{{ r.Tipo }}</td>
+          <td>{{ r.SKU }}</td>
+          <td class="text-truncate" style="max-width: 480px">{{ r.Nome }}</td>
+          <td>{{ r.Pubblicato }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% if data.total > per_page %}
+  <div class="mt-3 d-flex justify-content-between align-items-center">
+    <div class="small text-muted">Pagina {{ page }}</div>
+    <div class="btn-group">
+      {% if page > 1 %}
+        <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('admin.wpmap_view', page=page-1, per_page=per_page) }}">« Prec</a>
+      {% endif %}
+      {% if (page * per_page) < data.total %}
+        <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('admin.wpmap_view', page=page+1, per_page=per_page) }}">Succ »</a>
+      {% endif %}
+    </div>
+  </div>
+{% endif %}
+{% endblock %}

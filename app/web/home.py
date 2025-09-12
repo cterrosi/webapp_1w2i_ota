@@ -1,8 +1,10 @@
-from flask import Blueprint, render_template, request, redirect, url_for
+from flask import Blueprint, render_template, request, redirect, url_for, current_app
 from flask_login import login_required, current_user
 from ..services.runtime import get_setting_safe
 from ..utils import normalize_base_url
 from ..extensions import db
+from jinja2 import TemplateNotFound
+
 
 bp = Blueprint("home", __name__)  # nome blueprint corretto
 
@@ -23,15 +25,16 @@ def no_cache(resp):
     resp.headers["Expires"] = "0"
     return resp
 
-# ✅ ROOT → BOOKING (manteniamo l'endpoint 'home' così url_for('home.home') continua a funzionare)
 @bp.route("/", methods=["GET"], endpoint="home")
-def root_redirect_to_booking():
-    # se hai un endpoint del booking es: 'booking.index', usa quello:
+def home_index():
+    candidates = ["home.html", "index.html", "home/home.html"]
     try:
-        return redirect(url_for("booking.index"))
-    except Exception:
-        # fallback sicuro se non conosci il nome dell'endpoint del booking
-        return redirect("/booking")
+        tmpl = current_app.jinja_env.get_or_select_template(candidates)
+        # Usa render_template per avere i context processor (es. current_user)
+        return render_template(tmpl.name)
+    except TemplateNotFound:
+        current_app.logger.warning("Home template non trovato. Candidati=%s", candidates)
+        return redirect(url_for("home.settings"))
 
 
 @bp.route("/settings", methods=["GET", "POST"], endpoint="settings")

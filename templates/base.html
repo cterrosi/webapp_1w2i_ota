@@ -15,6 +15,11 @@
             {% if current_user.is_authenticated %}
             <div class="d-flex align-items-center gap-2">
 
+                <!-- Home -->
+                <a href="{{ url_for('home.home') }}"
+                   class="btn btn-outline-secondary btn-sm"
+                   data-spinner="Going Home...">Home</a>
+
                 <!-- Booking -->
                 <a href="{{ url_for('booking.booking_form') }}"
                    class="btn btn-outline-secondary btn-sm"
@@ -52,6 +57,20 @@
             </div>
             {% endif %}
         </div>
+
+        {# --- FLASH GLOBALI: visibili su tutte le pagine --- #}
+        {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+        <div class="mb-3">
+            {% for category, message in messages %}
+            <div class="alert alert-{{ 'warning' if category == 'message' else category }} alert-dismissible fade show" role="alert">
+                {{ message }}
+                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+        {% endwith %}
 
         {% block content %}{% endblock %}
     </div>
@@ -104,20 +123,17 @@
             document.addEventListener('visibilitychange', function () {
                 if (document.visibilityState === 'visible') hideSpinner();
             });
-            // (opzionale, utile per SPA/history)
             window.addEventListener('popstate', hideSpinner);
 
-            // Unico delegato per tutti i link con data-spinner
+            // Delegato per tutti i link con data-spinner
             document.addEventListener('click', function (e) {
                 const a = e.target.closest('a[data-spinner]');
                 if (!a) return;
 
-                // Niente spinner per: nuove tab, download, anchor locali, modificatori tastiera
                 if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || a.target === '_blank' || a.hasAttribute('download')) return;
                 const href = a.getAttribute('href') || '';
                 if (href.startsWith('#')) return;
 
-                // (facoltativo) mostra spinner solo per stessa origin
                 try {
                     const u = new URL(href, location.href);
                     if (u.origin !== location.origin) return;
@@ -126,15 +142,13 @@
                 showSpinner(a.dataset.spinner || 'Caricamento...');
             }, { capture: true });
 
-            // Unico delegato per tutti i form con data-spinner
+            // Delegato per form con data-spinner
             document.addEventListener('submit', function (e) {
                 const f = e.target && e.target.closest('form[data-spinner]');
                 if (!f) return;
                 showSpinner(f.dataset.spinner || 'Caricamento...');
-                // ⚠️ NON disabilitare gli input qui, altrimenti non vengono inviati nel POST
             }, true);
 
-            // All’avvio, assicurati che lo spinner sia nascosto
             hideSpinner();
         })();
     </script>

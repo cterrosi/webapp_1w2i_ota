@@ -1,7 +1,7 @@
 # app/web/admin.py
 import os, io, zipfile, requests
 
-from flask import Blueprint, jsonify, render_template_string, redirect, url_for, flash, current_app
+from flask import Blueprint, jsonify, render_template, render_template_string, request, redirect, url_for, flash, current_app
 from flask_login import login_required
 
 from sqlalchemy import text as _sql
@@ -12,6 +12,13 @@ from ..services.runtime import get_setting_safe
 from ..services.ota_endpoints import build_admin_calendar_url
 from ..settings import JSON_DIR, JSON_TEMP_DIR
 from ..models import OTAProduct, OTAProductMedia, OTAProductDetail
+
+# --- WordPress mapping service ---
+try:
+    from app.services import wp_mapping
+except Exception:
+    from ..services import wp_mapping
+
 
 bp = Blueprint("admin", __name__, url_prefix="/admin")
 
@@ -117,7 +124,7 @@ def download_departures_zip():
             <div class="small">URL: <code>{{ url }}</code></div>
             <div class="mt-2"><pre class="small mb-0">{{ body }}</pre></div>
           </div>
-          <a href="{{ url_for('home.settings') }}" class="btn btn-secondary btn-sm">Torna ai Settings</a>
+          <a href="{{ url_for('home.home') }}" class="btn btn-secondary btn-sm">Back to Home</a>
         {% endblock %}""", url=url, body=body), 502
 
     # 2) Extract
@@ -147,7 +154,7 @@ def download_departures_zip():
             <strong>La risposta non è uno ZIP valido.</strong>
           </div>
           <pre class="small">{{ body }}</pre>
-          <a href="{{ url_for('home.settings') }}" class="btn btn-secondary btn-sm">Torna ai Settings</a>
+          <a href="{{ url_for('home.home') }}" class="btn btn-secondary btn-sm">Back to home</a>
         {% endblock %}""", body=body), 502
 
     # 3) Report
@@ -158,8 +165,7 @@ def download_departures_zip():
         <div>File estratti: {{ extracted|length }} in <code>{{ json_temp_dir }}</code></div>
       </div>
       <div class="d-flex gap-2">
-        <a href="{{ url_for('home.settings') }}" class="btn btn-primary btn-sm">Torna ai Settings</a>
-        <a href="{{ url_for('admin.dep_run_sync') }}" class="btn btn-outline-secondary btn-sm" data-spinner="Eseguo import...">Esegui import (da downloads)</a>
+        <a href="/" class="btn btn-primary btn-sm">Back to Home</a>
       </div>
       {% if extracted %}
       <details class="mt-3">
@@ -215,7 +221,7 @@ def clear_products_cache():
     except Exception as e:
         db.session.rollback()
         flash(f"Errore durante la cancellazione cache: {e}", "danger")
-        return redirect(url_for("home.settings"))
+        return redirect(url_for("home.home"))
 
     # Messaggio finale
     msg = []
@@ -224,7 +230,7 @@ def clear_products_cache():
     msg.append(f"prodotti: {deleted_prod}")
     flash("Cache OTA pulita → " + ", ".join(msg) + ".", "success")
 
-    return redirect(url_for("home.settings"))
+    return redirect(url_for("home.home"))
 
 
 @bp.post("/clear_departures_cache", endpoint="clear_departures_cache")
@@ -239,7 +245,7 @@ def clear_departures_cache():
     except OperationalError as e:
         db.session.rollback()
         flash(f"Tabella departures_cache non trovata: nulla da cancellare. ({e.__class__.__name__})", "warning")
-    return redirect(url_for("home.settings"))
+    return redirect(url_for("home.home"))
 
 @bp.get("/prod_diag", endpoint="prod_diag")
 @login_required
@@ -254,11 +260,53 @@ def prod_diag():
         info["counts"]["ota_product"] = db.session.execute(_sql("SELECT COUNT(*) FROM ota_product")).scalar_one()
         info["counts"]["ota_product_detail"] = db.session.execute(_sql("SELECT COUNT(*) FROM ota_product_detail")).scalar_one()
         info["counts"]["ota_product_media"] = db.session.execute(_sql("SELECT COUNT(*) FROM ota_product_media")).scalar_one()
-        info["sample_detail"] = [
-            dict(row) for row in db.session.execute(_sql(
-                "SELECT product_id, name, LENGTH(descriptions_json) AS dlen FROM ota_product_detail LIMIT 5"
-            ))
-        ]
+
+        rows = db.session.execute(_sql(
+            "SELECT product_id, name, LENGTH(COALESCE(descriptions_json,'')) AS dlen "
+            "FROM ota_product_detail LIMIT 5"
+        ))
+        info["sample_detail"] = [dict(r._mapping) for r in rows]
+
     except Exception as e:
         info["error"] = str(e)
     return jsonify(info), 200
+
+# ================== WORDPRESS MAPPING ==================
+
+@bp.get("/wpmap/view", endpoint="wpmap_view")
+@login_required
+def wpmap_view():
+    wp_mapping.ensure_table(db)
+    page = int(request.args.get("page", 1))
+    per_page = int(request.args.get("per_page", 100))
+    offset = (page - 1) * per_page
+    data = wp_mapping.fetch_page(db, limit=per_page, offset=offset)
+    return render_template("admin/wpmap_list.html", data=data, page=page, per_page=per_page)
+
+@bp.post("/wpmap/clear", endpoint="wpmap_clear")
+@login_required
+def wpmap_clear():
+    wp_mapping.ensure_table(db)
+    deleted = wp_mapping.clear_all(db)
+    flash(f"Mapping svuotato. Righe cancellate: {deleted}", "warning")
+    return redirect(url_for("home.home"))
+
+@bp.post("/wpmap/import", endpoint="wpmap_import")
+@login_required
+def wpmap_import():
+    wp_mapping.ensure_table(db)
+
+    f = request.files.get("wp_csv")
+    if not f or f.filename == "":
+        flash("Seleziona un file CSV esportato da WooCommerce.", "danger")
+        return redirect(url_for("home.home"))
+
+    csv_bytes = f.read()
+    try:
+        res = wp_mapping.import_csv_bytes(db, csv_bytes)
+        flash(f"Import completato: {res['inserted_or_updated']} righe usate, {res['skipped']} scartate. Totale: {res['total_after']}.", "success")
+    except Exception as ex:
+        current_app.logger.exception("Errore import mapping WooCommerce")
+        flash(f"Errore durante l'import: {ex}", "danger")
+
+    return redirect(url_for("home.home"))
